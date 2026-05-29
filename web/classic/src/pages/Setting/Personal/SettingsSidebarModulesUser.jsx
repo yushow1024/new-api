@@ -74,6 +74,7 @@ export default function SettingsSidebarModulesUser() {
         enabled: true,
         playground: isSidebarModuleAllowed('chat', 'playground'),
         chat: isSidebarModuleAllowed('chat', 'chat'),
+        video: isSidebarModuleAllowed('chat', 'video'),
       };
     }
 
@@ -301,6 +302,7 @@ export default function SettingsSidebarModulesUser() {
           description: t('AI模型测试环境'),
         },
         { key: 'chat', title: t('聊天'), description: t('聊天会话管理') },
+        { key: 'video', title: t('视频生成'), description: t('AI视频生成') },
       ],
     },
     {

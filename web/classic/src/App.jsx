@@ -45,6 +45,7 @@ import ModelPage from './pages/Model';
 import ModelDeploymentPage from './pages/ModelDeployment';
 import Playground from './pages/Playground';
 import Subscription from './pages/Subscription';
+import Affiliate from './pages/Affiliate';
 import OAuth2Callback from './components/auth/OAuth2Callback';
 import PersonalSetting from './components/settings/PersonalSetting';
 import Setup from './pages/Setup';
@@ -55,6 +56,7 @@ const Dashboard = lazy(() => import('./pages/Dashboard'));
 const About = lazy(() => import('./pages/About'));
 const UserAgreement = lazy(() => import('./pages/UserAgreement'));
 const PrivacyPolicy = lazy(() => import('./pages/PrivacyPolicy'));
+const VideoGeneration = lazy(() => import('./pages/VideoGeneration'));
 
 function DynamicOAuth2Callback() {
   const { provider } = useParams();
@@ -152,6 +154,16 @@ function App() {
           element={
             <PrivateRoute>
               <Playground />
+            </PrivateRoute>
+          }
+        />
+        <Route
+          path='/console/video'
+          element={
+            <PrivateRoute>
+              <Suspense fallback={<Loading></Loading>} key={location.pathname}>
+                <VideoGeneration />
+              </Suspense>
             </PrivateRoute>
           }
         />
@@ -332,6 +344,14 @@ function App() {
                 <Pricing />
               </Suspense>
             )
+          }
+        />
+        <Route
+          path='/affiliate'
+          element={
+            <Suspense fallback={<Loading></Loading>} key={location.pathname}>
+              <Affiliate />
+            </Suspense>
           }
         />
         <Route

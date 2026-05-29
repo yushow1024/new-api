@@ -91,15 +91,19 @@ export default defineConfig({
     host: '0.0.0.0',
     proxy: {
       '/api': {
-        target: 'http://localhost:3000',
+        target: 'https://api.cerebrumiq.top',
         changeOrigin: true,
       },
       '/mj': {
-        target: 'http://localhost:3000',
+        target: 'https://api.cerebrumiq.top',
         changeOrigin: true,
       },
       '/pg': {
-        target: 'http://localhost:3000',
+        target: 'https://api.cerebrumiq.top',
+        changeOrigin: true,
+      },
+      '/v1': {
+        target: 'https://api.cerebrumiq.top',
         changeOrigin: true,
       },
     },

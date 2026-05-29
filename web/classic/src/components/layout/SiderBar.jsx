@@ -44,10 +44,12 @@ const routerMap = {
   about: '/about',
   detail: '/console',
   pricing: '/pricing',
+  affiliate: '/affiliate',
   task: '/console/task',
   models: '/console/models',
   deployment: '/console/deployment',
   playground: '/console/playground',
+  video: '/console/video',
   personal: '/console/personal',
 };
 
@@ -211,6 +213,11 @@ const SiderBar = ({ onNavigate = () => {} }) => {
         text: t('聊天'),
         itemKey: 'chat',
         items: chatItems,
+      },
+      {
+        text: t('视频生成'),
+        itemKey: 'video',
+        to: '/console/video',
       },
     ];
 
