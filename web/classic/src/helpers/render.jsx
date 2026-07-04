@@ -82,6 +82,7 @@ import {
   CalendarClock,
   Film,
 } from 'lucide-react';
+import * as LucideIcons from 'lucide-react';
 import {
   SiAtlassian,
   SiAuth0,
@@ -158,6 +159,42 @@ export function getLucideIcon(key, selected = false) {
     default:
       return <CircleUser {...commonProps} color={iconColor} />;
   }
+}
+
+// 仅供「自定义菜单」图标使用：按图标名解析 lucide-react 组件，失败回退 CircleUser
+export function getCustomMenuIcon(iconName, selected = false) {
+    const size = 16;
+    const strokeWidth = 2;
+    const SELECTED_COLOR = 'var(--semi-color-primary)';
+    const iconColor = selected ? SELECTED_COLOR : 'currentColor';
+    const commonProps = {
+        size,
+        strokeWidth,
+        color: iconColor,
+        className: `transition-colors duration-200 ${selected ? 'transition-transform duration-200 scale-105' : ''}`,
+    };
+
+    const raw = String(iconName || '').trim();
+    if (raw) {
+        // 支持 "bot" / "Bot" / "bot-message-square" / "BotMessageSquare" 多种写法
+        const candidates = new Set();
+        candidates.add(raw);
+        candidates.add(raw.charAt(0).toUpperCase() + raw.slice(1));
+        candidates.add(
+            raw
+                .split(/[-_\s]+/)
+                .filter(Boolean)
+                .map((s) => s.charAt(0).toUpperCase() + s.slice(1).toLowerCase())
+                .join(''),
+        );
+        for (const name of candidates) {
+            const IconComp = LucideIcons[name];
+            if (typeof IconComp === 'function' || typeof IconComp === 'object') {
+                return <IconComp {...commonProps} />;
+            }
+        }
+    }
+    return <CircleUser {...commonProps} />;
 }
 
 // 获取模型分类

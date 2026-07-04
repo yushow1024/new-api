@@ -20,7 +20,7 @@ For commercial licensing, please contact support@quantumnous.com
 import React, { useEffect, useMemo, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { getLucideIcon } from '../../helpers/render';
+import { getCustomMenuIcon, getLucideIcon } from '../../helpers/render';
 import { ChevronLeft } from 'lucide-react';
 import { useSidebarCollapsed } from '../../hooks/common/useSidebarCollapsed';
 import { useSidebar } from '../../hooks/common/useSidebar';
@@ -66,6 +66,9 @@ const SiderBar = ({ onNavigate = () => {} }) => {
 
   const [selectedKeys, setSelectedKeys] = useState(['home']);
   const [chatItems, setChatItems] = useState([]);
+  const [customMenuItems, setCustomMenuItems] = useState([]);
+  // 自定义菜单的外部链接映射: itemKey -> url。renderWrapper 通过它决定是否以外链方式打开。
+  const [externalLinkMap, setExternalLinkMap] = useState({});
   const [openedKeys, setOpenedKeys] = useState([]);
   const location = useLocation();
   const [routerMapState, setRouterMapState] = useState(routerMap);
@@ -214,21 +217,25 @@ const SiderBar = ({ onNavigate = () => {} }) => {
         itemKey: 'chat',
         items: chatItems,
       },
-      {
-        text: t('视频生成'),
-        itemKey: 'video',
-        to: '/console/video',
-      },
+      // 自定义菜单插在「聊天」之后、「视频生成」之前
+      ...customMenuItems,
+      // {
+      //   text: t('视频生成'),
+      //   itemKey: 'video',
+      //   to: '/console/video',
+      // },
     ];
 
     // 根据配置过滤项目
     const filteredItems = items.filter((item) => {
+      // 自定义菜单项不在 SidebarModules 配置内,无条件展示
+      if (item.isCustomMenu) return true;
       const configVisible = isModuleVisible('chat', item.itemKey);
       return configVisible;
     });
 
     return filteredItems;
-  }, [chatItems, t, isModuleVisible]);
+  }, [chatItems, customMenuItems, t, isModuleVisible]);
 
   // 更新路由映射，添加聊天路由
   const updateRouterMapWithChats = (chats) => {
@@ -280,6 +287,51 @@ const SiderBar = ({ onNavigate = () => {} }) => {
         showError('聊天数据解析失败');
       }
     }
+  }, []);
+
+  // 加载自定义菜单项 — 把 {address}/{key} 占位符替换为真实值,链接归类为外链 (target=_blank)
+  useEffect(() => {
+    const raw = localStorage.getItem('custom_menu');
+    if (!raw) return;
+    let menu;
+    try {
+      menu = JSON.parse(raw);
+    } catch (e) {
+      showError('自定义菜单数据解析失败');
+      return;
+    }
+    if (!Array.isArray(menu)) return;
+
+    // 与「聊天设置」的占位符语义保持一致: ServerAddress 来源 status,token 取当前用户最近一次复制 token,不强制
+    const status = JSON.parse(localStorage.getItem('status') || '{}');
+    const serverAddress = (
+      status.server_address ||
+      window.location.origin ||
+      ''
+    ).replace(/\/+$/, '');
+    const apiKey = localStorage.getItem('key') || 'sk-xxxx';
+
+    const items = [];
+    const linkMap = {};
+    menu.forEach((entry, i) => {
+      if (!entry || typeof entry !== 'object') return;
+      const name = entry.name;
+      const url = entry.url;
+      if (!name || !url) return;
+      const resolvedUrl = String(url)
+        .replaceAll('{address}', serverAddress)
+        .replaceAll('{key}', apiKey);
+      const itemKey = 'custom-menu-' + i;
+      items.push({
+        text: name,
+        itemKey,
+        icon: entry.icon || '',
+        isCustomMenu: true,
+      });
+      linkMap[itemKey] = resolvedUrl;
+    });
+    setCustomMenuItems(items);
+    setExternalLinkMap(linkMap);
   }, []);
 
   // 根据当前路径设置选中的菜单项
@@ -339,7 +391,9 @@ const SiderBar = ({ onNavigate = () => {} }) => {
         }
         icon={
           <div className='sidebar-icon-container flex-shrink-0'>
-            {getLucideIcon(item.itemKey, isSelected)}
+            {item.isCustomMenu
+              ? getCustomMenuIcon(item.icon, isSelected)
+              : getLucideIcon(item.itemKey, isSelected)}
           </div>
         }
         className={item.className}
@@ -421,6 +475,22 @@ const SiderBar = ({ onNavigate = () => {} }) => {
           hoverStyle='sidebar-nav-item:hover'
           selectedStyle='sidebar-nav-item-selected'
           renderWrapper={({ itemElement, props }) => {
+            // 优先识别自定义菜单的外链
+            const externalUrl = externalLinkMap[props.itemKey];
+            if (externalUrl) {
+              return (
+                <a
+                  href={externalUrl}
+                  target='_blank'
+                  rel='noopener noreferrer'
+                  style={{ textDecoration: 'none' }}
+                  onClick={onNavigate}
+                >
+                  {itemElement}
+                </a>
+              );
+            }
+
             const to =
               routerMapState[props.itemKey] || routerMap[props.itemKey];
 

@@ -31,6 +31,10 @@ export function setStatusData(data) {
   localStorage.setItem('enable_data_export', data.enable_data_export);
   localStorage.setItem('chats', JSON.stringify(data.chats));
   localStorage.setItem(
+    'custom_menu',
+    JSON.stringify(Array.isArray(data.custom_menu) ? data.custom_menu : []),
+  );
+  localStorage.setItem(
     'data_export_default_time',
     data.data_export_default_time,
   );
