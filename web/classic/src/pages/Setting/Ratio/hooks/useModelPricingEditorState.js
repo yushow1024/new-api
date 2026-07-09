@@ -42,6 +42,8 @@ const EMPTY_MODEL = {
   audioOutputPrice: '',
   billingExpr: '',
   requestRuleExpr: '',
+  perSecondPrice: '',
+  perSecondRuleExpr: '',
   rawRatios: {
     modelRatio: '',
     completionRatio: '',
@@ -138,6 +140,20 @@ const buildModelState = (name, sourceMaps) => {
     };
   }
 
+  if (billingMode === 'per_second') {
+    const price = toNumericString(sourceMaps.ModelPerSecondPrice?.[name]);
+    const rule = (sourceMaps.ModelPerSecondRules?.[name] || '').trim();
+    return {
+      ...EMPTY_MODEL,
+      name,
+      billingMode: 'per_second',
+      perSecondPrice: price,
+      perSecondRuleExpr: rule,
+      rawRatios: { ...EMPTY_MODEL.rawRatios },
+      hasConflict: false,
+    };
+  }
+
   const modelRatio = toNumericString(sourceMaps.ModelRatio[name]);
   const completionRatio = toNumericString(sourceMaps.CompletionRatio[name]);
   const completionRatioMeta = normalizeCompletionRatioMeta(
@@ -225,6 +241,7 @@ const buildModelState = (name, sourceMaps) => {
 
 export const isBasePricingUnset = (model) =>
   model.billingMode !== 'tiered_expr' &&
+  model.billingMode !== 'per_second' &&
   !hasValue(model.fixedPrice) && !hasValue(model.inputPrice);
 
 export const getModelWarnings = (model, t) => {
@@ -232,6 +249,12 @@ export const getModelWarnings = (model, t) => {
     return [];
   }
   if (model.billingMode === 'tiered_expr') {
+    return [];
+  }
+  if (model.billingMode === 'per_second') {
+    if (!hasValue(model.perSecondPrice)) {
+      return [t('按秒计费下必须填写每秒价格。')];
+    }
     return [];
   }
   const warnings = [];
@@ -301,6 +324,14 @@ export const buildSummaryText = (model, t) => {
       return `${t('表达式计费')}${requestRuleSuffix}`;
     }
     return `${t('阶梯计费')} (${tierCount} ${t('档')})${requestRuleSuffix}`;
+  }
+
+  if (model.billingMode === 'per_second') {
+    const price = hasValue(model.perSecondPrice) ? model.perSecondPrice : '?';
+    const ruleSuffix = hasValue(model.perSecondRuleExpr)
+      ? `，${t('含规则')}`
+      : '';
+    return `${t('按秒')} $${price} / ${t('秒')}${ruleSuffix}`;
   }
 
   if (model.billingMode === 'per-request' && hasValue(model.fixedPrice)) {
@@ -498,6 +529,31 @@ export const buildPreviewRows = (model, t) => {
     return rows;
   }
 
+  if (model.billingMode === 'per_second') {
+    const rows = [
+      {
+        key: 'BillingMode',
+        label: 'ModelBillingMode',
+        value: 'per_second',
+      },
+      // {
+      //   key: 'PerSecondPrice',
+      //   label: 'PerSecondPrice',
+      //   value: hasValue(model.perSecondPrice) ? `$${model.perSecondPrice} / sec` : t('空'),
+      // },
+    ];
+    // if (hasValue(model.perSecondRuleExpr)) {
+    //   rows.push({
+    //     key: 'PerSecondRules',
+    //     label: 'PerSecondRules',
+    //     value: model.perSecondRuleExpr.length > 60
+    //       ? `${model.perSecondRuleExpr.slice(0, 60)}…`
+    //       : model.perSecondRuleExpr,
+    //   });
+    // }
+    return rows;
+  }
+
   const inputPrice = toNumberOrNull(model.inputPrice);
   if (inputPrice === null) {
     const rows = [
@@ -648,6 +704,12 @@ export function useModelPricingEditorState({
       AudioCompletionRatio: parseOptionJSON(options.AudioCompletionRatio),
       ModelBillingMode: parseOptionJSON(options['billing_setting.billing_mode']),
       ModelBillingExpr: parseOptionJSON(options['billing_setting.billing_expr']),
+      ModelPerSecondPrice: parseOptionJSON(
+        options['billing_setting.billing_per_second_price'],
+      ),
+      ModelPerSecondRules: parseOptionJSON(
+        options['billing_setting.billing_per_second_rules'],
+      ),
     };
 
     const names = new Set([
@@ -663,6 +725,8 @@ export function useModelPricingEditorState({
       ...Object.keys(sourceMaps.AudioCompletionRatio),
       ...Object.keys(sourceMaps.ModelBillingMode),
       ...Object.keys(sourceMaps.ModelBillingExpr),
+      ...Object.keys(sourceMaps.ModelPerSecondPrice),
+      ...Object.keys(sourceMaps.ModelPerSecondRules),
     ]);
 
     const nextModels = Array.from(names)
@@ -879,6 +943,14 @@ export function useModelPricingEditorState({
       if (value === 'tiered_expr' && !model.billingExpr) {
         next.billingExpr = 'tier("base", p * 0 + c * 0)';
       }
+      if (value === 'per_second') {
+        if (!hasValue(model.perSecondPrice)) {
+          next.perSecondPrice = '0.5';
+        }
+        if (model.perSecondRuleExpr === undefined || model.perSecondRuleExpr === null) {
+          next.perSecondRuleExpr = '';
+        }
+      }
       return next;
     });
   };
@@ -896,6 +968,23 @@ export function useModelPricingEditorState({
     upsertModel(selectedModel.name, (model) => ({
       ...model,
       requestRuleExpr: newExpr,
+    }));
+  };
+
+  const handlePerSecondPriceChange = (newPrice) => {
+    if (!selectedModel) return;
+    const normalized = toNumericString(newPrice);
+    upsertModel(selectedModel.name, (model) => ({
+      ...model,
+      perSecondPrice: normalized,
+    }));
+  };
+
+  const handlePerSecondRuleExprChange = (newExpr) => {
+    if (!selectedModel) return;
+    upsertModel(selectedModel.name, (model) => ({
+      ...model,
+      perSecondRuleExpr: newExpr || '',
     }));
   };
 
@@ -1037,6 +1126,8 @@ export function useModelPricingEditorState({
       const tieredOutput = {
         'billing_setting.billing_mode': {},
         'billing_setting.billing_expr': {},
+        'billing_setting.billing_per_second_price': {},
+        'billing_setting.billing_per_second_rules': {},
       };
 
       for (const model of models) {
@@ -1048,6 +1139,14 @@ export function useModelPricingEditorState({
           if (finalBillingExpr) {
             tieredOutput['billing_setting.billing_mode'][model.name] = 'tiered_expr';
             tieredOutput['billing_setting.billing_expr'][model.name] = finalBillingExpr;
+          }
+        } else if (model.billingMode === 'per_second') {
+          const priceNum = toNumberOrNull(model.perSecondPrice);
+          if (priceNum !== null && priceNum >= 0) {
+            tieredOutput['billing_setting.billing_mode'][model.name] = 'per_second';
+            tieredOutput['billing_setting.billing_per_second_price'][model.name] = priceNum;
+            tieredOutput['billing_setting.billing_per_second_rules'][model.name] =
+              (model.perSecondRuleExpr || '').trim();
           }
         }
 
@@ -1125,6 +1224,8 @@ export function useModelPricingEditorState({
     handleBillingModeChange,
     handleBillingExprChange,
     handleRequestRuleExprChange,
+    handlePerSecondPriceChange,
+    handlePerSecondRuleExprChange,
     handleSubmit,
     addModel,
     deleteModel,
