@@ -39,14 +39,16 @@ const { Text } = Typography;
 // ---------------------------------------------------------------------------
 // Per-second pricing editor
 //
-// Storage contract (mirrors what backend will read):
-//   billing_setting.billing_per_second       — model → expression string
-//                                              (e.g. "seconds * 0.5")
-//   billing_setting.billing_per_second_rules — model → array of rule strings
-//                                              (each like "(cond ? X : 1)")
+// Storage contract (matches backend billing_setting.GetPerSecondPrice /
+// GetPerSecondRules exactly):
+//   billing_setting.billing_per_second_price — model → $/sec number
+//   billing_setting.billing_per_second_rules — model → rule-chain string of
+//                                              `(cond ? X : 1)` factors
+//                                              joined with ` * `
 //
-// The frontend derives perSecondExpr from perSecondPrice on every change.
-// Rules are kept as a single visual group (multipliers stack via `*`).
+// Rules are persisted as a single string (mirroring tiered_expr's request
+// rules shape); the visual editor renders one or more groups and the
+// groups are flattened back to the string on every change.
 // ---------------------------------------------------------------------------
 
 export default function PerSecondPricingEditor({
@@ -62,14 +64,21 @@ export default function PerSecondPricingEditor({
     return Number.isFinite(num) ? num : 0;
   }, [pricePerSec]);
 
+  // Detect parse failure BEFORE the empty-array fallback so the legacy
+  // fallback block can render. tryParseRequestRuleExpr returns:
+  //   - [] when input is empty
+  //   - [...] when parsed cleanly
+  //   - null when syntax is unrecognizable
+  const parsedFailure = useMemo(() => {
+    if (!ruleExpr || !ruleExpr.trim()) return false;
+    return tryParseRequestRuleExpr(ruleExpr) === null;
+  }, [ruleExpr]);
+
   // Parse the persisted rule string into an array of visual groups.
-  // tryParseRequestRuleExpr already splits on top-level ` * ` so multiple
-  // groups round-trip cleanly. Mirrors TieredPricingEditor's approach.
   const parsedGroups = useMemo(() => {
     if (!ruleExpr || !ruleExpr.trim()) return [];
     return tryParseRequestRuleExpr(ruleExpr) || [];
   }, [ruleExpr]);
-  const canUseVisualRules = parsedGroups !== null && parsedGroups.length >= 0;
   const [groups, setGroups] = useState(parsedGroups);
 
   // Re-sync local groups state when the persisted string changes externally
@@ -168,7 +177,7 @@ export default function PerSecondPricingEditor({
           {t('X 可以小于 1 当折扣用。需要"额外加固定费"或"只给某维度加价"，请用表达式/阶梯计费。')}
         </Text>
 
-        {!canUseVisualRules && ruleExpr && ruleExpr.trim() ? (
+        {parsedFailure ? (
           // Legacy / manually edited expression can't be parsed into groups:
           // show a warning + raw textarea + "reset" button so the user can
           // start fresh without losing their saved value.

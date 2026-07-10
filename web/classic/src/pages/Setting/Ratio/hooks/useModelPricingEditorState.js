@@ -536,21 +536,24 @@ export const buildPreviewRows = (model, t) => {
         label: 'ModelBillingMode',
         value: 'per_second',
       },
-      // {
-      //   key: 'PerSecondPrice',
-      //   label: 'PerSecondPrice',
-      //   value: hasValue(model.perSecondPrice) ? `$${model.perSecondPrice} / sec` : t('空'),
-      // },
+      {
+        key: 'PerSecondPrice',
+        label: t('每秒价格 ($/sec)'),
+        value: hasValue(model.perSecondPrice)
+          ? `$${model.perSecondPrice} / sec`
+          : t('空'),
+      },
     ];
-    // if (hasValue(model.perSecondRuleExpr)) {
-    //   rows.push({
-    //     key: 'PerSecondRules',
-    //     label: 'PerSecondRules',
-    //     value: model.perSecondRuleExpr.length > 60
-    //       ? `${model.perSecondRuleExpr.slice(0, 60)}…`
-    //       : model.perSecondRuleExpr,
-    //   });
-    // }
+    if (hasValue(model.perSecondRuleExpr)) {
+      rows.push({
+        key: 'PerSecondRules',
+        label: t('请求条件调价规则'),
+        value:
+          model.perSecondRuleExpr.length > 60
+            ? `${model.perSecondRuleExpr.slice(0, 60)}…`
+            : model.perSecondRuleExpr,
+      });
+    }
     return rows;
   }
 
