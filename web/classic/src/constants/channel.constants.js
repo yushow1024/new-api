@@ -189,6 +189,11 @@ export const CHANNEL_OPTIONS = [
     color: 'blue',
     label: 'Codex (OpenAI OAuth)',
   },
+  {
+    value: 58,
+    color: 'purple',
+    label: '星核 XingHe',
+  },
 ];
 
 // Channel types that support upstream model list fetching in UI.
