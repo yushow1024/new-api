@@ -35,6 +35,8 @@ type Pricing struct {
 	SupportedEndpointTypes []constant.EndpointType `json:"supported_endpoint_types"`
 	BillingMode            string                  `json:"billing_mode,omitempty"`
 	BillingExpr            string                  `json:"billing_expr,omitempty"`
+	PerSecondPrice         *float64                `json:"billing_per_second_price,omitempty"`
+	PerSecondRules         string                  `json:"billing_per_second_rules,omitempty"`
 	PricingVersion         string                  `json:"pricing_version,omitempty"`
 }
 
@@ -331,10 +333,21 @@ func updatePricing() {
 			audioCompletionRatio := ratio_setting.GetAudioCompletionRatio(model)
 			pricing.AudioCompletionRatio = &audioCompletionRatio
 		}
-		if billingMode := billing_setting.GetBillingMode(model); billingMode == "tiered_expr" {
+		switch billingMode := billing_setting.GetBillingMode(model); billingMode {
+		case billing_setting.BillingModeTieredExpr:
 			if expr, ok := billing_setting.GetBillingExpr(model); ok && strings.TrimSpace(expr) != "" {
 				pricing.BillingMode = billingMode
 				pricing.BillingExpr = expr
+			}
+		case billing_setting.BillingModePerSecond:
+			if price, ok := billing_setting.GetPerSecondPrice(model); ok && price >= 0 {
+				pricing.BillingMode = billingMode
+				pricing.PerSecondPrice = &price
+				pricing.ModelPrice = price
+				pricing.QuotaType = 1
+				if rules, exists := billing_setting.GetPerSecondRules(model); exists {
+					pricing.PerSecondRules = rules
+				}
 			}
 		}
 		pricingMap = append(pricingMap, pricing)

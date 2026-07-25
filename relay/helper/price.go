@@ -167,6 +167,10 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) (types.PriceData, error) {
 	groupRatioInfo := HandleGroupRatio(c, info)
 
+	if billing_setting.GetBillingMode(info.OriginModelName) == billing_setting.BillingModePerSecond {
+		return modelPriceHelperPerSecond(c, info, groupRatioInfo)
+	}
+
 	modelPrice, success := ratio_setting.GetModelPrice(info.OriginModelName, true)
 	usePrice := success
 	var modelRatio float64
@@ -225,17 +229,65 @@ func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) (types
 }
 
 func HasModelBillingConfig(modelName string) bool {
+	switch billing_setting.GetBillingMode(modelName) {
+	case billing_setting.BillingModePerSecond:
+		price, ok := billing_setting.GetPerSecondPrice(modelName)
+		return ok && price >= 0
+	case billing_setting.BillingModeTieredExpr:
+		expr, ok := billing_setting.GetBillingExpr(modelName)
+		return ok && strings.TrimSpace(expr) != ""
+	}
 	if _, ok := ratio_setting.GetModelPrice(modelName, false); ok {
 		return true
 	}
 	if _, ok, _ := ratio_setting.GetModelRatio(modelName); ok {
 		return true
 	}
-	if billing_setting.GetBillingMode(modelName) != billing_setting.BillingModeTieredExpr {
-		return false
+	return false
+}
+
+func modelPriceHelperPerSecond(c *gin.Context, info *relaycommon.RelayInfo, groupRatioInfo types.GroupRatioInfo) (types.PriceData, error) {
+	pricePerSecond, ok := billing_setting.GetPerSecondPrice(info.OriginModelName)
+	if !ok {
+		return types.PriceData{}, fmt.Errorf("model %s is configured as per_second but has no per-second price", info.OriginModelName)
 	}
-	expr, ok := billing_setting.GetBillingExpr(modelName)
-	return ok && strings.TrimSpace(expr) != ""
+	if pricePerSecond < 0 {
+		return types.PriceData{}, fmt.Errorf("model %s per-second price must not be negative", info.OriginModelName)
+	}
+
+	ruleRatio := 1.0
+	if rules, exists := billing_setting.GetPerSecondRules(info.OriginModelName); exists && strings.TrimSpace(rules) != "" {
+		requestInput, err := ResolveIncomingBillingExprRequestInput(c, info)
+		if err != nil {
+			return types.PriceData{}, fmt.Errorf("model %s per-second request rules input failed: %w", info.OriginModelName, err)
+		}
+		result, _, err := billingexpr.RunExprWithRequest(rules, billingexpr.TokenParams{}, requestInput)
+		if err != nil {
+			return types.PriceData{}, fmt.Errorf("model %s per-second request rules failed: %w", info.OriginModelName, err)
+		}
+		if result < 0 {
+			return types.PriceData{}, fmt.Errorf("model %s per-second request rules returned a negative multiplier", info.OriginModelName)
+		}
+		ruleRatio = result
+	}
+
+	quota := billingexpr.QuotaRound(pricePerSecond * common.QuotaPerUnit * groupRatioInfo.GroupRatio)
+	freeModel := false
+	if !operation_setting.GetQuotaSetting().EnableFreeModelPreConsume && (groupRatioInfo.GroupRatio == 0 || pricePerSecond == 0 || ruleRatio == 0) {
+		quota = 0
+		freeModel = true
+	}
+
+	return types.PriceData{
+		FreeModel:      freeModel,
+		ModelPrice:     pricePerSecond,
+		UsePrice:       true,
+		Quota:          quota,
+		GroupRatioInfo: groupRatioInfo,
+		OtherRatios: map[string]float64{
+			"request_rules": ruleRatio,
+		},
+	}, nil
 }
 
 func modelPriceHelperTiered(c *gin.Context, info *relaycommon.RelayInfo, promptTokens int, meta *types.TokenCountMeta, groupRatioInfo types.GroupRatioInfo) (types.PriceData, error) {

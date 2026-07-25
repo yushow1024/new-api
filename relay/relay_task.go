@@ -13,20 +13,23 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	"github.com/QuantumNous/new-api/relay/channel"
 	"github.com/QuantumNous/new-api/relay/channel/task/taskcommon"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/gin-gonic/gin"
 )
 
 type TaskSubmitResult struct {
-	UpstreamTaskID string
-	TaskData       []byte
-	Platform       constant.TaskPlatform
-	Quota          int
+	UpstreamTaskID  string
+	TaskData        []byte
+	Platform        constant.TaskPlatform
+	Quota           int
+	InitialTaskInfo *relaycommon.TaskInfo
 	//PerCallPrice   types.PriceData
 }
 
@@ -194,12 +197,29 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	}
 
 	// 6. 将 OtherRatios 应用到基础额度
-	if !common.StringsContains(constant.TaskPricePatches, modelName) {
-		for _, ra := range info.PriceData.OtherRatios {
-			if ra != 1.0 {
-				info.PriceData.Quota = int(float64(info.PriceData.Quota) * ra)
-			}
+	billingMode := billing_setting.GetBillingMode(modelName)
+	if billingMode == billing_setting.BillingModePerSecond {
+		seconds, ok := info.PriceData.OtherRatios["seconds"]
+		if !ok || seconds <= 0 {
+			return nil, service.TaskErrorWrapperLocal(fmt.Errorf("duration seconds are required for per-second billing"), "invalid_duration", http.StatusBadRequest)
 		}
+	}
+
+	// 按秒计费必须把时长和请求规则倍率应用到每秒单价，其他任务沿用原有倍率逻辑。
+	if billingMode == billing_setting.BillingModePerSecond {
+		ratioProduct := 1.0
+		for _, ratio := range info.PriceData.OtherRatios {
+			ratioProduct *= ratio
+		}
+		info.PriceData.Quota = billingexpr.QuotaRound(
+			info.PriceData.ModelPrice * common.QuotaPerUnit * info.PriceData.GroupRatioInfo.GroupRatio * ratioProduct,
+		)
+	} else if !common.StringsContains(constant.TaskPricePatches, modelName) {
+		ratioProduct := 1.0
+		for _, ratio := range info.PriceData.OtherRatios {
+			ratioProduct *= ratio
+		}
+		info.PriceData.Quota = int(float64(info.PriceData.Quota) * ratioProduct)
 	}
 
 	// 7. 预扣费（仅首次 — 重试时 info.Billing 已存在，跳过）
@@ -221,8 +241,12 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	if err != nil {
 		return nil, service.TaskErrorWrapper(err, "do_request_failed", http.StatusInternalServerError)
 	}
-	if resp != nil && resp.StatusCode != http.StatusOK {
+	if resp == nil {
+		return nil, service.TaskErrorWrapperLocal(errors.New("upstream returned an empty response"), "empty_upstream_response", http.StatusBadGateway)
+	}
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		responseBody, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
 		return nil, service.TaskErrorWrapper(fmt.Errorf("%s", string(responseBody)), "fail_to_fetch_task", resp.StatusCode)
 	}
 
@@ -240,6 +264,16 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 		return nil, taskErr
 	}
 
+	var initialTaskInfo *relaycommon.TaskInfo
+	if parser, ok := adaptor.(channel.InitialTaskResultParser); ok {
+		parsedInfo, parseErr := parser.ParseInitialTaskResult(taskData)
+		if parseErr != nil {
+			common.SysError("parse initial task result failed: " + parseErr.Error())
+		} else {
+			initialTaskInfo = parsedInfo
+		}
+	}
+
 	// 11. 提交后计费调整：让适配器根据上游实际返回调整 OtherRatios
 	finalQuota := info.PriceData.Quota
 	if adjustedRatios := adaptor.AdjustBillingOnSubmit(info, taskData); len(adjustedRatios) > 0 {
@@ -250,10 +284,11 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	}
 
 	return &TaskSubmitResult{
-		UpstreamTaskID: upstreamTaskID,
-		TaskData:       taskData,
-		Platform:       platform,
-		Quota:          finalQuota,
+		UpstreamTaskID:  upstreamTaskID,
+		TaskData:        taskData,
+		Platform:        platform,
+		Quota:           finalQuota,
+		InitialTaskInfo: initialTaskInfo,
 	}, nil
 }
 

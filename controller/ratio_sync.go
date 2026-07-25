@@ -72,17 +72,20 @@ var pricingSyncFields = []string{
 	"model_price",
 	billing_setting.BillingModeField,
 	billing_setting.BillingExprField,
+	billing_setting.PerSecondPriceField,
+	billing_setting.PerSecondRulesField,
 }
 
 var numericPricingSyncFields = map[string]bool{
-	"model_ratio":            true,
-	"completion_ratio":       true,
-	"cache_ratio":            true,
-	"create_cache_ratio":     true,
-	"image_ratio":            true,
-	"audio_ratio":            true,
-	"audio_completion_ratio": true,
-	"model_price":            true,
+	"model_ratio":                       true,
+	"completion_ratio":                  true,
+	"cache_ratio":                       true,
+	"create_cache_ratio":                true,
+	"image_ratio":                       true,
+	"audio_ratio":                       true,
+	"audio_completion_ratio":            true,
+	"model_price":                       true,
+	billing_setting.PerSecondPriceField: true,
 }
 
 type upstreamResult struct {
@@ -391,6 +394,8 @@ func FetchUpstreamRatios(c *gin.Context) {
 				AudioCompletionRatio *float64 `json:"audio_completion_ratio"`
 				BillingMode          string   `json:"billing_mode"`
 				BillingExpr          string   `json:"billing_expr"`
+				PerSecondPrice       *float64 `json:"billing_per_second_price"`
+				PerSecondRules       string   `json:"billing_per_second_rules"`
 			}
 			if err := common.Unmarshal(body.Data, &pricingItems); err != nil {
 				logger.LogWarn(c.Request.Context(), "unrecognized data format from "+chItem.Name+": "+err.Error())
@@ -408,14 +413,25 @@ func FetchUpstreamRatios(c *gin.Context) {
 			modelPriceMap := make(map[string]float64)
 			billingModeMap := make(map[string]string)
 			billingExprMap := make(map[string]string)
+			perSecondPriceMap := make(map[string]float64)
+			perSecondRulesMap := make(map[string]string)
 
 			for _, item := range pricingItems {
 				if item.ModelName == "" {
 					continue
 				}
-				if item.BillingMode == billing_setting.BillingModeTieredExpr && strings.TrimSpace(item.BillingExpr) != "" {
-					billingModeMap[item.ModelName] = billing_setting.BillingModeTieredExpr
-					billingExprMap[item.ModelName] = item.BillingExpr
+				switch item.BillingMode {
+				case billing_setting.BillingModeTieredExpr:
+					if strings.TrimSpace(item.BillingExpr) != "" {
+						billingModeMap[item.ModelName] = billing_setting.BillingModeTieredExpr
+						billingExprMap[item.ModelName] = item.BillingExpr
+					}
+				case billing_setting.BillingModePerSecond:
+					if item.PerSecondPrice != nil && *item.PerSecondPrice >= 0 {
+						billingModeMap[item.ModelName] = billing_setting.BillingModePerSecond
+						perSecondPriceMap[item.ModelName] = *item.PerSecondPrice
+						perSecondRulesMap[item.ModelName] = item.PerSecondRules
+					}
 				}
 				if item.QuotaType == 1 {
 					modelPriceMap[item.ModelName] = item.ModelPrice
@@ -486,6 +502,12 @@ func FetchUpstreamRatios(c *gin.Context) {
 			}
 			if len(billingExprMap) > 0 {
 				converted[billing_setting.BillingExprField] = valueMap(billingExprMap)
+			}
+			if len(perSecondPriceMap) > 0 {
+				converted[billing_setting.PerSecondPriceField] = valueMap(perSecondPriceMap)
+			}
+			if len(perSecondRulesMap) > 0 {
+				converted[billing_setting.PerSecondRulesField] = valueMap(perSecondRulesMap)
 			}
 
 			ch <- upstreamResult{Name: uniqueName, Data: converted}

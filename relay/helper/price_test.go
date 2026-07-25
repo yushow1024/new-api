@@ -3,6 +3,7 @@ package helper
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -59,4 +60,46 @@ func TestModelPriceHelperTieredUsesPreloadedRequestInput(t *testing.T) {
 	require.Equal(t, "stream", info.TieredBillingSnapshot.EstimatedTier)
 	require.Equal(t, billing_setting.BillingModeTieredExpr, info.TieredBillingSnapshot.BillingMode)
 	require.Equal(t, common.QuotaPerUnit, info.TieredBillingSnapshot.QuotaPerUnit)
+}
+
+func TestModelPriceHelperPerSecond(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	saved := map[string]string{}
+	require.NoError(t, config.GlobalConfig.SaveToDB(func(key, value string) error {
+		saved[key] = value
+		return nil
+	}))
+	t.Cleanup(func() {
+		require.NoError(t, config.GlobalConfig.LoadFromDB(saved))
+	})
+
+	require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{
+		"billing_setting.billing_mode":             `{"per-second-test":"per_second"}`,
+		"billing_setting.billing_per_second_price": `{"per-second-test":0.1}`,
+		"billing_setting.billing_per_second_rules": `{"per-second-test":"param(\"resolution\") == \"1080p\" ? 1.5 : 1"}`,
+	}))
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/videos/generations", strings.NewReader(`{"model":"per-second-test","duration":8,"resolution":"1080p"}`))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+	ctx.Set("group", "default")
+
+	info := &relaycommon.RelayInfo{
+		OriginModelName: "per-second-test",
+		UserGroup:       "default",
+		UsingGroup:      "default",
+		RequestHeaders:  map[string]string{"Content-Type": "application/json"},
+	}
+
+	priceData, err := ModelPriceHelperPerCall(ctx, info)
+	require.NoError(t, err)
+	require.True(t, priceData.UsePrice)
+	require.Equal(t, 0.1, priceData.ModelPrice)
+	require.Equal(t, 1.5, priceData.OtherRatios["request_rules"])
+	require.Equal(t, billingexpr.QuotaRound(0.1*common.QuotaPerUnit), priceData.Quota)
+
+	finalQuota := billingexpr.QuotaRound(priceData.ModelPrice * common.QuotaPerUnit * priceData.GroupRatioInfo.GroupRatio * 8 * priceData.OtherRatios["request_rules"])
+	require.Equal(t, billingexpr.QuotaRound(0.1*common.QuotaPerUnit*8*1.5), finalQuota)
 }

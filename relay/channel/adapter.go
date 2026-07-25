@@ -78,6 +78,12 @@ type TaskAdaptor interface {
 	ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, error)
 }
 
+// InitialTaskResultParser extracts the initial state from a task submit response.
+// Adaptors may implement it when submission can already return a terminal state.
+type InitialTaskResultParser interface {
+	ParseInitialTaskResult(respBody []byte) (*relaycommon.TaskInfo, error)
+}
+
 type OpenAIVideoConverter interface {
 	ConvertToOpenAIVideo(originTask *model.Task) ([]byte, error)
 }

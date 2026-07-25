@@ -592,13 +592,52 @@ func RelayTask(c *gin.Context) {
 		task.Quota = result.Quota
 		task.Data = result.TaskData
 		task.Action = relayInfo.Action
+		applyInitialTaskInfo(task, result.InitialTaskInfo)
 		if insertErr := task.Insert(); insertErr != nil {
 			common.SysError("insert task error: " + insertErr.Error())
+		} else {
+			if task.Status == model.TaskStatusFailure && task.Quota != 0 {
+				service.RefundTaskQuota(c, task, task.FailReason)
+			}
+			if relayInfo.ChannelType == constant.ChannelTypeHuaying &&
+				task.Status != model.TaskStatusSuccess && task.Status != model.TaskStatusFailure {
+				service.EnqueueHuayingVideoTaskPolling(task.TaskID)
+			}
 		}
 	}
 
 	if taskErr != nil {
 		respondTaskError(c, taskErr)
+	}
+}
+
+func applyInitialTaskInfo(task *model.Task, info *relaycommon.TaskInfo) {
+	if task == nil || info == nil || strings.TrimSpace(info.Status) == "" {
+		return
+	}
+	task.Status = model.TaskStatus(info.Status)
+	if info.Progress != "" {
+		task.Progress = info.Progress
+	}
+	now := time.Now().Unix()
+	switch task.Status {
+	case model.TaskStatusInProgress:
+		if task.StartTime == 0 {
+			task.StartTime = now
+		}
+	case model.TaskStatusSuccess:
+		task.Progress = "100%"
+		task.FinishTime = now
+		if info.Url != "" {
+			task.PrivateData.ResultURL = info.Url
+		}
+	case model.TaskStatusFailure:
+		task.Progress = "100%"
+		task.FinishTime = now
+		task.FailReason = info.Reason
+		if task.FailReason == "" {
+			task.FailReason = "upstream task failed"
+		}
 	}
 }
 

@@ -11,20 +11,28 @@ import (
 const (
 	BillingModeRatio      = "ratio"
 	BillingModeTieredExpr = "tiered_expr"
+	BillingModePerSecond  = "per_second"
 	BillingModeField      = "billing_mode"
 	BillingExprField      = "billing_expr"
+	PerSecondPriceField   = "billing_per_second_price"
+	PerSecondRulesField   = "billing_per_second_rules"
 )
 
 // BillingSetting is managed by config.GlobalConfig.Register.
-// DB keys: billing_setting.billing_mode, billing_setting.billing_expr
+// DB keys: billing_setting.billing_mode, billing_setting.billing_expr,
+// billing_setting.billing_per_second_price, billing_setting.billing_per_second_rules.
 type BillingSetting struct {
-	BillingMode map[string]string `json:"billing_mode"`
-	BillingExpr map[string]string `json:"billing_expr"`
+	BillingMode    map[string]string  `json:"billing_mode"`
+	BillingExpr    map[string]string  `json:"billing_expr"`
+	PerSecondPrice map[string]float64 `json:"billing_per_second_price"`
+	PerSecondRules map[string]string  `json:"billing_per_second_rules"`
 }
 
 var billingSetting = BillingSetting{
-	BillingMode: make(map[string]string),
-	BillingExpr: make(map[string]string),
+	BillingMode:    make(map[string]string),
+	BillingExpr:    make(map[string]string),
+	PerSecondPrice: make(map[string]float64),
+	PerSecondRules: make(map[string]string),
 }
 
 func init() {
@@ -47,6 +55,16 @@ func GetBillingExpr(model string) (string, bool) {
 	return expr, ok
 }
 
+func GetPerSecondPrice(model string) (float64, bool) {
+	price, ok := billingSetting.PerSecondPrice[model]
+	return price, ok
+}
+
+func GetPerSecondRules(model string) (string, bool) {
+	rules, ok := billingSetting.PerSecondRules[model]
+	return rules, ok
+}
+
 func GetBillingModeCopy() map[string]string {
 	return lo.Assign(billingSetting.BillingMode)
 }
@@ -55,13 +73,27 @@ func GetBillingExprCopy() map[string]string {
 	return lo.Assign(billingSetting.BillingExpr)
 }
 
+func GetPerSecondPriceCopy() map[string]float64 {
+	return lo.Assign(billingSetting.PerSecondPrice)
+}
+
+func GetPerSecondRulesCopy() map[string]string {
+	return lo.Assign(billingSetting.PerSecondRules)
+}
+
 func GetPricingSyncData(base map[string]any) map[string]any {
-	extra := make(map[string]any, 2)
+	extra := make(map[string]any, 4)
 	if modes := GetBillingModeCopy(); len(modes) > 0 {
 		extra[BillingModeField] = modes
 	}
 	if exprs := GetBillingExprCopy(); len(exprs) > 0 {
 		extra[BillingExprField] = exprs
+	}
+	if prices := GetPerSecondPriceCopy(); len(prices) > 0 {
+		extra[PerSecondPriceField] = prices
+	}
+	if rules := GetPerSecondRulesCopy(); len(rules) > 0 {
+		extra[PerSecondRulesField] = rules
 	}
 	return lo.Assign(base, extra)
 }

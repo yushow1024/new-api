@@ -7,7 +7,9 @@ import (
 	"io"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -35,6 +37,102 @@ type TaskPollingAdaptor interface {
 // 打破 service -> relay -> relay/channel -> service 的循环依赖。
 var GetTaskAdaptorFunc func(platform constant.TaskPlatform) TaskPollingAdaptor
 
+const (
+	huayingTaskPollingInterval = 5 * time.Second
+	huayingTaskPollingTimeout  = 10 * time.Minute
+)
+
+var huayingPollingTasks sync.Map
+
+// EnqueueHuayingVideoTaskPolling submits a dedicated Huaying polling job to the relay worker pool.
+func EnqueueHuayingVideoTaskPolling(taskID string) {
+	if strings.TrimSpace(taskID) == "" {
+		return
+	}
+	if _, loaded := huayingPollingTasks.LoadOrStore(taskID, struct{}{}); loaded {
+		return
+	}
+	common.RelayCtxGo(context.Background(), func() {
+		defer huayingPollingTasks.Delete(taskID)
+		pollHuayingVideoTask(taskID, huayingTaskPollingInterval, huayingTaskPollingTimeout)
+	})
+}
+
+func pollHuayingVideoTask(taskID string, interval, timeout time.Duration) {
+	ctx := context.Background()
+	startedAt := time.Now()
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		task, exists, err := model.GetByOnlyTaskId(taskID)
+		if err != nil {
+			logger.LogError(ctx, fmt.Sprintf("failed to load Huaying task %s: %v", taskID, err))
+			continue
+		}
+		if !exists || task.Status == model.TaskStatusSuccess || task.Status == model.TaskStatusFailure {
+			return
+		}
+
+		deadline := time.Unix(task.SubmitTime, 0).Add(timeout)
+		if task.SubmitTime <= 0 {
+			deadline = startedAt.Add(timeout)
+		}
+		if !time.Now().Before(deadline) {
+			markHuayingTaskTimedOut(ctx, task, timeout)
+			return
+		}
+
+		ch, err := model.CacheGetChannel(task.ChannelId)
+		if err != nil {
+			logger.LogError(ctx, fmt.Sprintf("failed to load channel for Huaying task %s: %v", taskID, err))
+			continue
+		}
+		if ch.Type != constant.ChannelTypeHuaying {
+			logger.LogWarn(ctx, fmt.Sprintf("task %s is not a Huaying task, stop dedicated polling", taskID))
+			return
+		}
+		if GetTaskAdaptorFunc == nil {
+			logger.LogError(ctx, "task adaptor factory is not initialized")
+			continue
+		}
+		adaptor := GetTaskAdaptorFunc(task.Platform)
+		if adaptor == nil {
+			logger.LogError(ctx, fmt.Sprintf("Huaying adaptor not found for task %s", taskID))
+			continue
+		}
+		adaptor.Init(&relaycommon.RelayInfo{
+			ChannelMeta: &relaycommon.ChannelMeta{
+				ChannelType:    ch.Type,
+				ChannelBaseUrl: ch.GetBaseURL(),
+				ApiKey:         ch.Key,
+			},
+		})
+
+		upstreamID := task.GetUpstreamTaskID()
+		if err := updateVideoSingleTask(ctx, adaptor, ch, upstreamID, map[string]*model.Task{upstreamID: task}); err != nil {
+			logger.LogError(ctx, fmt.Sprintf("failed to poll Huaying task %s: %v", taskID, err))
+		}
+	}
+}
+
+func markHuayingTaskTimedOut(ctx context.Context, task *model.Task, timeout time.Duration) {
+	oldStatus := task.Status
+	task.Status = model.TaskStatusFailure
+	task.Progress = taskcommon.ProgressComplete
+	task.FinishTime = time.Now().Unix()
+	task.FailReason = fmt.Sprintf("task polling timed out after %s", timeout)
+
+	won, err := task.UpdateWithStatus(oldStatus)
+	if err != nil {
+		logger.LogError(ctx, fmt.Sprintf("failed to mark Huaying task %s as timed out: %v", task.TaskID, err))
+		return
+	}
+	if won && task.Quota != 0 {
+		RefundTaskQuota(ctx, task, task.FailReason)
+	}
+}
+
 // sweepTimedOutTasks 在主轮询之前独立清理超时任务。
 // 每次最多处理 100 条，剩余的下个周期继续处理。
 // 使用 per-task CAS (UpdateWithStatus) 防止覆盖被正常轮询已推进的任务。
@@ -54,7 +152,12 @@ func sweepTimedOutTasks(ctx context.Context) {
 	now := time.Now().Unix()
 	timedOutCount := 0
 
+	huayingPlatform := constant.TaskPlatform(strconv.Itoa(constant.ChannelTypeHuaying))
 	for _, task := range tasks {
+		// 画影任务由专用 10 分钟超时轮询管理，避免被全局超时配置提前终止。
+		if task.Platform == huayingPlatform {
+			continue
+		}
 		isLegacy := task.SubmitTime > 0 && task.SubmitTime < legacyTaskCutoff
 
 		oldStatus := task.Status
@@ -96,7 +199,12 @@ func TaskPollingLoop() {
 		sweepTimedOutTasks(ctx)
 		allTasks := model.GetAllUnFinishSyncTasks(constant.TaskQueryLimit)
 		platformTask := make(map[constant.TaskPlatform][]*model.Task)
+		huayingPlatform := constant.TaskPlatform(strconv.Itoa(constant.ChannelTypeHuaying))
 		for _, t := range allTasks {
+			if t.Platform == huayingPlatform {
+				EnqueueHuayingVideoTaskPolling(t.TaskID)
+				continue
+			}
 			platformTask[t.Platform] = append(platformTask[t.Platform], t)
 		}
 		for platform, tasks := range platformTask {
@@ -325,11 +433,13 @@ func updateVideoTasks(ctx context.Context, platform constant.TaskPlatform, chann
 	if adaptor == nil {
 		return fmt.Errorf("video adaptor not found")
 	}
-	info := &relaycommon.RelayInfo{}
-	info.ChannelMeta = &relaycommon.ChannelMeta{
-		ChannelBaseUrl: cacheGetChannel.GetBaseURL(),
+	info := &relaycommon.RelayInfo{
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelType:    cacheGetChannel.Type,
+			ChannelBaseUrl: cacheGetChannel.GetBaseURL(),
+			ApiKey:         cacheGetChannel.Key,
+		},
 	}
-	info.ApiKey = cacheGetChannel.Key
 	adaptor.Init(info)
 	for _, taskId := range taskIds {
 		if err := updateVideoSingleTask(ctx, adaptor, cacheGetChannel, taskId, taskM); err != nil {
