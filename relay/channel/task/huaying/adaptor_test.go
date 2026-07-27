@@ -13,6 +13,7 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting/config"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
@@ -27,6 +28,21 @@ func newTestAdaptor(channelType int, baseURL string) *TaskAdaptor {
 		},
 	})
 	return adaptor
+}
+
+func loadBillingModesForTest(t *testing.T, modes string) {
+	t.Helper()
+	saved := map[string]string{}
+	require.NoError(t, config.GlobalConfig.SaveToDB(func(key, value string) error {
+		saved[key] = value
+		return nil
+	}))
+	t.Cleanup(func() {
+		require.NoError(t, config.GlobalConfig.LoadFromDB(saved))
+	})
+	require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{
+		"billing_setting.billing_mode": modes,
+	}))
 }
 
 func TestParseDurationSeconds(t *testing.T) {
@@ -101,6 +117,8 @@ func TestVideoGenerationRequestExamples(t *testing.T) {
 }
 
 func TestValidateXingHeCompatibleRequest(t *testing.T) {
+	loadBillingModesForTest(t, `{"seedance-2.0-fast-yo":"per_second"}`)
+
 	body := `{"model":"seedance-2.0-fast-yo","prompt":"cat on moon","seconds":5,"size":"1280x720","protect_stripe":false}`
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos/generations", bytes.NewBufferString(body))
@@ -108,7 +126,10 @@ func TestValidateXingHeCompatibleRequest(t *testing.T) {
 	defer common.CleanupBodyStorage(c)
 
 	adaptor := newTestAdaptor(constant.ChannelTypeXingHe, "https://api.xheai.cc")
-	info := &relaycommon.RelayInfo{TaskRelayInfo: &relaycommon.TaskRelayInfo{}}
+	info := &relaycommon.RelayInfo{
+		OriginModelName: "seedance-2.0-fast-yo",
+		TaskRelayInfo:   &relaycommon.TaskRelayInfo{},
+	}
 	require.Nil(t, adaptor.ValidateRequestAndSetAction(c, info))
 	require.Equal(t, map[string]float64{"seconds": 5}, adaptor.EstimateBilling(c, info))
 
@@ -125,6 +146,24 @@ func TestValidateXingHeCompatibleRequest(t *testing.T) {
 	require.NotContains(t, payload, "duration")
 	require.NotContains(t, payload, "resolution")
 	require.NotContains(t, payload, "aspectRatio")
+}
+
+func TestEstimateBillingSkipsDurationForPerCallModel(t *testing.T) {
+	loadBillingModesForTest(t, `{"seedance-2.0-fast-y1":"ratio"}`)
+
+	body := `{"model":"seedance-2.0-fast-y1","prompt":"cat on moon","duration":5,"resolution":"720p","aspectRatio":"16:9"}`
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos/generations", bytes.NewBufferString(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+	defer common.CleanupBodyStorage(c)
+
+	adaptor := newTestAdaptor(constant.ChannelTypeHuaying, "http://example.com/v1")
+	info := &relaycommon.RelayInfo{
+		OriginModelName: "seedance-2.0-fast-y1",
+		TaskRelayInfo:   &relaycommon.TaskRelayInfo{},
+	}
+	require.Nil(t, adaptor.ValidateRequestAndSetAction(c, info))
+	require.Nil(t, adaptor.EstimateBilling(c, info))
 }
 
 func TestBuildHuayingBodyFromXingHeAliases(t *testing.T) {
