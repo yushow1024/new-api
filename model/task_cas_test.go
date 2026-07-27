@@ -145,6 +145,23 @@ func TestSnapshot_Roundtrip(t *testing.T) {
 // UpdateWithStatus CAS — DB integration tests
 // ---------------------------------------------------------------------------
 
+func TestTaskRequestMetadataRoundtrip(t *testing.T) {
+	truncateTables(t)
+
+	task := &Task{
+		TaskID:  "task_request_metadata",
+		Status:  TaskStatusSubmitted,
+		ReqData: json.RawMessage(`{"model":"huaying-video","prompt":"test"}`),
+		LogId:   123,
+	}
+	insertTask(t, task)
+
+	var reloaded Task
+	require.NoError(t, DB.First(&reloaded, task.ID).Error)
+	assert.JSONEq(t, string(task.ReqData), string(reloaded.ReqData))
+	assert.Equal(t, task.LogId, reloaded.LogId)
+}
+
 func TestUpdateWithStatus_Win(t *testing.T) {
 	truncateTables(t)
 

@@ -500,6 +500,7 @@ func RelayTask(c *gin.Context) {
 
 	var result *relay.TaskSubmitResult
 	var taskErr *dto.TaskError
+	var huayingReqData []byte
 	defer func() {
 		if taskErr != nil && relayInfo.Billing != nil {
 			relayInfo.Billing.Refund(c)
@@ -548,6 +549,14 @@ func RelayTask(c *gin.Context) {
 
 		result, taskErr = relay.RelayTaskSubmit(c, relayInfo)
 		if taskErr == nil {
+			if relayInfo.ChannelType == constant.ChannelTypeHuaying {
+				body, readErr := bodyStorage.Bytes()
+				if readErr != nil {
+					common.SysError("read Huaying request body for task persistence failed: " + readErr.Error())
+				} else {
+					huayingReqData = append([]byte(nil), body...)
+				}
+			}
 			break
 		}
 
@@ -574,7 +583,7 @@ func RelayTask(c *gin.Context) {
 		if settleErr := service.SettleBilling(c, relayInfo, result.Quota); settleErr != nil {
 			common.SysError("settle task billing error: " + settleErr.Error())
 		}
-		service.LogTaskConsumption(c, relayInfo)
+		logId := service.LogTaskConsumption(c, relayInfo)
 
 		task := model.InitTask(result.Platform, relayInfo)
 		task.PrivateData.UpstreamTaskID = result.UpstreamTaskID
@@ -592,6 +601,10 @@ func RelayTask(c *gin.Context) {
 		task.Quota = result.Quota
 		task.Data = result.TaskData
 		task.Action = relayInfo.Action
+		if relayInfo.ChannelType == constant.ChannelTypeHuaying {
+			task.ReqData = huayingReqData
+			task.LogId = logId
+		}
 		applyInitialTaskInfo(task, result.InitialTaskInfo)
 		if insertErr := task.Insert(); insertErr != nil {
 			common.SysError("insert task error: " + insertErr.Error())

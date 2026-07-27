@@ -63,6 +63,8 @@ type Task struct {
 	// 禁止返回给用户，内部可能包含key等隐私信息
 	PrivateData TaskPrivateData `json:"-" gorm:"column:private_data;type:json"`
 	Data        json.RawMessage `json:"data" gorm:"type:json"`
+	ReqData     json.RawMessage `json:"req_data,omitempty" gorm:"type:json"`
+	LogId       int             `json:"log_id,omitempty" gorm:"index"`
 }
 
 func (t *Task) SetData(data any) {
