@@ -1,6 +1,10 @@
 package dto
 
-import "github.com/QuantumNous/new-api/constant"
+import (
+	"encoding/json"
+
+	"github.com/QuantumNous/new-api/constant"
+)
 
 // 这里不好动就不动了，本来想独立出来的（
 type OpenAIModels struct {
@@ -8,6 +12,7 @@ type OpenAIModels struct {
 	Object                 string                  `json:"object"`
 	Created                int                     `json:"created"`
 	OwnedBy                string                  `json:"owned_by"`
+	Ext                    json.RawMessage         `json:"ext,omitempty"`
 	SupportedEndpointTypes []constant.EndpointType `json:"supported_endpoint_types"`
 }
 

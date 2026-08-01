@@ -3853,6 +3853,8 @@
     "默认折叠侧边栏": "Default collapse sidebar",
     "默认测试模型": "Default Test Model",
     "默认用户消息": "Default User Message",
-    "默认补全倍率": "Default completion ratio"
+    "默认补全倍率": "Default completion ratio",
+    "扩展字段（JSON）": "Extension field (JSON)",
+    "该字段将作为 JSON 通过 /v1/models 接口返回": "This field is returned as JSON by the /v1/models endpoint"
   }
 }

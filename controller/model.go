@@ -272,9 +272,16 @@ func ListModels(c *gin.Context, modelType int) {
 	if len(ownerGroups) > 0 {
 		ownerByModel = getPreferredModelOwners(userModelNames, ownerGroups)
 	}
+	extByModel, err := model.GetModelExtMap(userModelNames)
+	if err != nil {
+		common.SysLog(fmt.Sprintf("GetModelExtMap error: %v", err))
+		extByModel = nil
+	}
 	userOpenAiModels := make([]dto.OpenAIModels, 0, len(userModelNames))
 	for _, modelName := range userModelNames {
-		userOpenAiModels = append(userOpenAiModels, buildOpenAIModel(modelName, ownerByModel))
+		modelItem := buildOpenAIModel(modelName, ownerByModel)
+		modelItem.Ext = extByModel[modelName]
+		userOpenAiModels = append(userOpenAiModels, modelItem)
 	}
 
 	switch modelType {

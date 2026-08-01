@@ -2,6 +2,7 @@ package controller
 
 import (
 	"encoding/json"
+	"fmt"
 	"sort"
 	"strconv"
 	"strings"
@@ -77,6 +78,17 @@ func GetModelMeta(c *gin.Context) {
 	common.ApiSuccess(c, &m)
 }
 
+func validateModelExt(ext string) error {
+	if strings.TrimSpace(ext) == "" {
+		return nil
+	}
+	var value any
+	if err := common.UnmarshalJsonStr(ext, &value); err != nil {
+		return fmt.Errorf("扩展字段 ext 不是有效的 JSON: %w", err)
+	}
+	return nil
+}
+
 // CreateModelMeta 新建模型
 func CreateModelMeta(c *gin.Context) {
 	var m model.Model
@@ -86,6 +98,10 @@ func CreateModelMeta(c *gin.Context) {
 	}
 	if m.ModelName == "" {
 		common.ApiErrorMsg(c, "模型名称不能为空")
+		return
+	}
+	if err := validateModelExt(m.Ext); err != nil {
+		common.ApiError(c, err)
 		return
 	}
 	// 名称冲突检查
@@ -126,6 +142,10 @@ func UpdateModelMeta(c *gin.Context) {
 			return
 		}
 	} else {
+		if err := validateModelExt(m.Ext); err != nil {
+			common.ApiError(c, err)
+			return
+		}
 		// 名称冲突检查
 		if dup, err := model.IsModelNameDuplicated(m.Id, m.ModelName); err != nil {
 			common.ApiError(c, err)

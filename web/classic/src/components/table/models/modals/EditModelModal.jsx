@@ -121,6 +121,7 @@ const EditModelModal = (props) => {
     vendor: '',
     vendor_icon: '',
     endpoints: '',
+    ext: '',
     name_rule: props.editingModel?.model_name ? 0 : undefined, // 通过未配置模型过来的固定为精确匹配
     status: true,
     sync_official: true,
@@ -147,6 +148,9 @@ const EditModelModal = (props) => {
         // endpoints 保持原始 JSON 字符串，若为空设为空串
         if (!data.endpoints) {
           data.endpoints = '';
+        }
+        if (!data.ext) {
+          data.ext = '';
         }
         // 处理status/sync_official，将数字转为布尔值
         data.status = data.status === 1;
@@ -196,6 +200,7 @@ const EditModelModal = (props) => {
         ...values,
         tags: Array.isArray(values.tags) ? values.tags.join(',') : values.tags,
         endpoints: values.endpoints || '',
+        ext: values.ext || '',
         status: values.status ? 1 : 0,
         sync_official: values.sync_official ? 1 : 0,
       };
@@ -522,6 +527,22 @@ const EditModelModal = (props) => {
                           </Space>
                         )
                       }
+                    />
+                  </Col>
+                  <Col span={24}>
+                    <JSONEditor
+                      field='ext'
+                      label={t('扩展字段（JSON）')}
+                      placeholder={'{\n  "key": "value"\n}'}
+                      value={values.ext}
+                      onChange={(val) =>
+                        formApiRef.current?.setValue('ext', val)
+                      }
+                      formApi={formApiRef.current}
+                      editorType='object'
+                      extraText={t(
+                        '该字段将作为 JSON 通过 /v1/models 接口返回',
+                      )}
                     />
                   </Col>
                   <Col span={24}>

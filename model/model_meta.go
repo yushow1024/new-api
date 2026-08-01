@@ -1,6 +1,7 @@
 package model
 
 import (
+	"encoding/json"
 	"strconv"
 	"strings"
 
@@ -29,6 +30,7 @@ type Model struct {
 	Tags         string         `json:"tags,omitempty" gorm:"type:varchar(255)"`
 	VendorID     int            `json:"vendor_id,omitempty" gorm:"index"`
 	Endpoints    string         `json:"endpoints,omitempty" gorm:"type:text"`
+	Ext          string         `json:"ext,omitempty" gorm:"type:text"`
 	Status       int            `json:"status" gorm:"default:1"`
 	SyncOfficial int            `json:"sync_official" gorm:"default:1"`
 	CreatedTime  int64          `json:"created_time" gorm:"bigint"`
@@ -78,7 +80,7 @@ func (mi *Model) Update() error {
 	mi.UpdatedTime = common.GetTimestamp()
 	// 使用 Select 强制更新所有字段，包括零值
 	return DB.Model(&Model{}).Where("id = ?", mi.Id).
-		Select("model_name", "description", "icon", "tags", "vendor_id", "endpoints", "status", "sync_official", "name_rule", "updated_time").
+		Select("model_name", "description", "icon", "tags", "vendor_id", "endpoints", "ext", "status", "sync_official", "name_rule", "updated_time").
 		Updates(mi).Error
 }
 
@@ -108,6 +110,75 @@ func GetAllModels(offset int, limit int) ([]*Model, error) {
 	var models []*Model
 	err := DB.Order("id DESC").Offset(offset).Limit(limit).Find(&models).Error
 	return models, err
+}
+
+// GetModelExtMap 返回模型名称对应的有效 JSON 扩展字段。
+// 名称规则的优先级与模型元数据匹配保持一致：精确匹配优先，其次依次为前缀、后缀、包含。
+func GetModelExtMap(modelNames []string) (map[string]json.RawMessage, error) {
+	modelNames = normalizeLookupValues(modelNames)
+	result := make(map[string]json.RawMessage)
+	if len(modelNames) == 0 {
+		return result, nil
+	}
+
+	var metadata []Model
+	if err := DB.Select("id", "model_name", "name_rule", "ext").Order("id ASC").Find(&metadata).Error; err != nil {
+		return nil, err
+	}
+
+	requested := make(map[string]struct{}, len(modelNames))
+	for _, modelName := range modelNames {
+		requested[modelName] = struct{}{}
+	}
+	matched := make(map[string]*Model, len(modelNames))
+	prefixRules := make([]*Model, 0)
+	suffixRules := make([]*Model, 0)
+	containsRules := make([]*Model, 0)
+	for i := range metadata {
+		meta := &metadata[i]
+		switch meta.NameRule {
+		case NameRuleExact:
+			if _, ok := requested[meta.ModelName]; ok {
+				matched[meta.ModelName] = meta
+			}
+		case NameRulePrefix:
+			prefixRules = append(prefixRules, meta)
+		case NameRuleSuffix:
+			suffixRules = append(suffixRules, meta)
+		case NameRuleContains:
+			containsRules = append(containsRules, meta)
+		}
+	}
+
+	applyRules := func(rules []*Model, matches func(modelName, rule string) bool) {
+		for _, rule := range rules {
+			for _, modelName := range modelNames {
+				if _, exists := matched[modelName]; exists {
+					continue
+				}
+				if matches(modelName, rule.ModelName) {
+					matched[modelName] = rule
+				}
+			}
+		}
+	}
+	applyRules(prefixRules, strings.HasPrefix)
+	applyRules(suffixRules, strings.HasSuffix)
+	applyRules(containsRules, strings.Contains)
+
+	for modelName, meta := range matched {
+		ext := strings.TrimSpace(meta.Ext)
+		if ext == "" {
+			continue
+		}
+		var value any
+		if err := common.UnmarshalJsonStr(ext, &value); err != nil {
+			common.SysLog("ignore invalid model ext for " + meta.ModelName + ": " + err.Error())
+			continue
+		}
+		result[modelName] = json.RawMessage(ext)
+	}
+	return result, nil
 }
 
 func GetBoundChannelsByModelsMap(modelNames []string) (map[string][]BoundChannel, error) {

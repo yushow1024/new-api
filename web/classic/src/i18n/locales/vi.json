@@ -4242,6 +4242,8 @@
     "默认折叠侧边栏": "Mặc định thu gọn thanh bên",
     "默认测试模型": "Mô hình kiểm tra mặc định",
     "默认用户消息": "Xin chào",
-    "默认补全倍率": "Tỷ lệ hoàn thành mặc định"
+    "默认补全倍率": "Tỷ lệ hoàn thành mặc định",
+    "扩展字段（JSON）": "Trường mở rộng (JSON)",
+    "该字段将作为 JSON 通过 /v1/models 接口返回": "Trường này được trả về dưới dạng JSON qua API /v1/models"
   }
 }

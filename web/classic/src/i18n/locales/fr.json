@@ -3708,6 +3708,8 @@
     "默认折叠侧边栏": "Réduire la barre latérale par défaut",
     "默认测试模型": "Modèle de test par défaut",
     "默认用户消息": "Bonjour",
-    "默认补全倍率": "Taux de complétion par défaut"
+    "默认补全倍率": "Taux de complétion par défaut",
+    "扩展字段（JSON）": "Champ d'extension (JSON)",
+    "该字段将作为 JSON 通过 /v1/models 接口返回": "Ce champ est renvoyé au format JSON par le point de terminaison /v1/models"
   }
 }
