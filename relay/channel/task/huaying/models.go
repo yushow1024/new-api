@@ -3,14 +3,17 @@ package huaying
 import "encoding/json"
 
 const (
-	ChannelName = "huaying-video"
+	ChannelName         = "huaying-video"
+	HongNiaoChannelName = "hongniao-video"
 
-	huayingSubmitPath = "/videos/generations"
-	xingHeSubmitPath  = "/api/generate-video"
+	huayingSubmitPath  = "/videos/generations"
+	hongNiaoSubmitPath = "/videos"
+	xingHeSubmitPath   = "/api/generate-video"
 )
 
-// VideoGenerationRequest matches the public parameters of Huaying /v1/videos/generations.
-// Duration uses RawMessage so both numeric values and strings such as "5s" are preserved.
+// VideoGenerationRequest matches the unified public parameters accepted by
+// POST /v1/videos/generations. Duration and Seconds use RawMessage so numeric
+// values and strings such as "5s" are both preserved during normalization.
 type VideoGenerationRequest struct {
 	Model       string          `json:"model"`
 	RequestID   *string         `json:"requestId,omitempty"`
@@ -24,9 +27,16 @@ type VideoGenerationRequest struct {
 	FirstFrame  *string         `json:"firstFrame,omitempty"`
 	LastFrame   *string         `json:"lastFrame,omitempty"`
 
-	// Seconds and Size are XingHe-compatible aliases. The public contract remains
-	// Huaying-compatible; accepting these aliases keeps existing XingHe callers
-	// working and they are normalized before validation and upstream forwarding.
+	// XingHe-compatible aliases.
 	Seconds json.RawMessage `json:"seconds,omitempty"`
 	Size    string          `json:"size,omitempty"`
+
+	// HongNiao-compatible aliases. They are accepted on the unified creation
+	// endpoint and normalized before validation and upstream forwarding.
+	AspectRatioSnake *string  `json:"aspect_ratio,omitempty"`
+	ImageURLs        []string `json:"image_urls,omitempty"`
+	VideoURLs        []string `json:"video_urls,omitempty"`
+	VideoURL         *string  `json:"video_url,omitempty"`
+	AudioURLs        []string `json:"audio_urls,omitempty"`
+	AudioURL         *string  `json:"audio_url,omitempty"`
 }

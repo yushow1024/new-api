@@ -38,27 +38,27 @@ type TaskPollingAdaptor interface {
 var GetTaskAdaptorFunc func(platform constant.TaskPlatform) TaskPollingAdaptor
 
 const (
-	huayingTaskPollingInterval = 5 * time.Second
-	huayingTaskPollingTimeout  = 10 * time.Minute
+	dedicatedVideoTaskPollingInterval = 5 * time.Second
+	dedicatedVideoTaskPollingTimeout  = 10 * time.Minute
 )
 
-var huayingPollingTasks sync.Map
+var dedicatedVideoPollingTasks sync.Map
 
-// EnqueueHuayingVideoTaskPolling submits a dedicated Huaying polling job to the relay worker pool.
-func EnqueueHuayingVideoTaskPolling(taskID string) {
+// EnqueueDedicatedVideoTaskPolling submits a short-interval polling job for supported video channels.
+func EnqueueDedicatedVideoTaskPolling(taskID string) {
 	if strings.TrimSpace(taskID) == "" {
 		return
 	}
-	if _, loaded := huayingPollingTasks.LoadOrStore(taskID, struct{}{}); loaded {
+	if _, loaded := dedicatedVideoPollingTasks.LoadOrStore(taskID, struct{}{}); loaded {
 		return
 	}
 	common.RelayCtxGo(context.Background(), func() {
-		defer huayingPollingTasks.Delete(taskID)
-		pollHuayingVideoTask(taskID, huayingTaskPollingInterval, huayingTaskPollingTimeout)
+		defer dedicatedVideoPollingTasks.Delete(taskID)
+		pollDedicatedVideoTask(taskID, dedicatedVideoTaskPollingInterval, dedicatedVideoTaskPollingTimeout)
 	})
 }
 
-func pollHuayingVideoTask(taskID string, interval, timeout time.Duration) {
+func pollDedicatedVideoTask(taskID string, interval, timeout time.Duration) {
 	ctx := context.Background()
 	startedAt := time.Now()
 	ticker := time.NewTicker(interval)
@@ -67,7 +67,7 @@ func pollHuayingVideoTask(taskID string, interval, timeout time.Duration) {
 	for range ticker.C {
 		task, exists, err := model.GetByOnlyTaskId(taskID)
 		if err != nil {
-			logger.LogError(ctx, fmt.Sprintf("failed to load Huaying task %s: %v", taskID, err))
+			logger.LogError(ctx, fmt.Sprintf("failed to load dedicated video task %s: %v", taskID, err))
 			continue
 		}
 		if !exists || task.Status == model.TaskStatusSuccess || task.Status == model.TaskStatusFailure {
@@ -79,17 +79,17 @@ func pollHuayingVideoTask(taskID string, interval, timeout time.Duration) {
 			deadline = startedAt.Add(timeout)
 		}
 		if !time.Now().Before(deadline) {
-			markHuayingTaskTimedOut(ctx, task, timeout)
+			markDedicatedVideoTaskTimedOut(ctx, task, timeout)
 			return
 		}
 
 		ch, err := model.CacheGetChannel(task.ChannelId)
 		if err != nil {
-			logger.LogError(ctx, fmt.Sprintf("failed to load channel for Huaying task %s: %v", taskID, err))
+			logger.LogError(ctx, fmt.Sprintf("failed to load channel for dedicated video task %s: %v", taskID, err))
 			continue
 		}
-		if ch.Type != constant.ChannelTypeHuaying {
-			logger.LogWarn(ctx, fmt.Sprintf("task %s is not a Huaying task, stop dedicated polling", taskID))
+		if !constant.IsDedicatedVideoPollingChannel(ch.Type) {
+			logger.LogWarn(ctx, fmt.Sprintf("task %s does not belong to a dedicated video polling channel", taskID))
 			return
 		}
 		if GetTaskAdaptorFunc == nil {
@@ -98,7 +98,7 @@ func pollHuayingVideoTask(taskID string, interval, timeout time.Duration) {
 		}
 		adaptor := GetTaskAdaptorFunc(task.Platform)
 		if adaptor == nil {
-			logger.LogError(ctx, fmt.Sprintf("Huaying adaptor not found for task %s", taskID))
+			logger.LogError(ctx, fmt.Sprintf("dedicated video adaptor not found for task %s", taskID))
 			continue
 		}
 		adaptor.Init(&relaycommon.RelayInfo{
@@ -111,12 +111,12 @@ func pollHuayingVideoTask(taskID string, interval, timeout time.Duration) {
 
 		upstreamID := task.GetUpstreamTaskID()
 		if err := updateVideoSingleTask(ctx, adaptor, ch, upstreamID, map[string]*model.Task{upstreamID: task}); err != nil {
-			logger.LogError(ctx, fmt.Sprintf("failed to poll Huaying task %s: %v", taskID, err))
+			logger.LogError(ctx, fmt.Sprintf("failed to poll dedicated video task %s: %v", taskID, err))
 		}
 	}
 }
 
-func markHuayingTaskTimedOut(ctx context.Context, task *model.Task, timeout time.Duration) {
+func markDedicatedVideoTaskTimedOut(ctx context.Context, task *model.Task, timeout time.Duration) {
 	oldStatus := task.Status
 	task.Status = model.TaskStatusFailure
 	task.Progress = taskcommon.ProgressComplete
@@ -125,7 +125,7 @@ func markHuayingTaskTimedOut(ctx context.Context, task *model.Task, timeout time
 
 	won, err := task.UpdateWithStatus(oldStatus)
 	if err != nil {
-		logger.LogError(ctx, fmt.Sprintf("failed to mark Huaying task %s as timed out: %v", task.TaskID, err))
+		logger.LogError(ctx, fmt.Sprintf("failed to mark dedicated video task %s as timed out: %v", task.TaskID, err))
 		return
 	}
 	if won && task.Quota != 0 {
@@ -152,10 +152,9 @@ func sweepTimedOutTasks(ctx context.Context) {
 	now := time.Now().Unix()
 	timedOutCount := 0
 
-	huayingPlatform := constant.TaskPlatform(strconv.Itoa(constant.ChannelTypeHuaying))
 	for _, task := range tasks {
-		// 画影任务由专用 10 分钟超时轮询管理，避免被全局超时配置提前终止。
-		if task.Platform == huayingPlatform {
+		// 画影、红鸟任务由专用 10 分钟超时轮询管理，避免被全局超时配置提前终止。
+		if isDedicatedVideoPollingPlatform(task.Platform) {
 			continue
 		}
 		isLegacy := task.SubmitTime > 0 && task.SubmitTime < legacyTaskCutoff
@@ -199,10 +198,9 @@ func TaskPollingLoop() {
 		sweepTimedOutTasks(ctx)
 		allTasks := model.GetAllUnFinishSyncTasks(constant.TaskQueryLimit)
 		platformTask := make(map[constant.TaskPlatform][]*model.Task)
-		huayingPlatform := constant.TaskPlatform(strconv.Itoa(constant.ChannelTypeHuaying))
 		for _, t := range allTasks {
-			if t.Platform == huayingPlatform {
-				EnqueueHuayingVideoTaskPolling(t.TaskID)
+			if isDedicatedVideoPollingPlatform(t.Platform) {
+				EnqueueDedicatedVideoTaskPolling(t.TaskID)
 				continue
 			}
 			platformTask[t.Platform] = append(platformTask[t.Platform], t)
@@ -243,6 +241,11 @@ func TaskPollingLoop() {
 		}
 		common.SysLog("任务进度轮询完成")
 	}
+}
+
+func isDedicatedVideoPollingPlatform(platform constant.TaskPlatform) bool {
+	return platform == constant.TaskPlatform(strconv.Itoa(constant.ChannelTypeHuaying)) ||
+		platform == constant.TaskPlatform(strconv.Itoa(constant.ChannelTypeHongNiao))
 }
 
 // DispatchPlatformUpdate 按平台分发轮询更新

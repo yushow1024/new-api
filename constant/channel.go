@@ -57,6 +57,7 @@ const (
 	ChannelTypeCodex          = 57
 	ChannelTypeXingHe         = 58
 	ChannelTypeHuaying        = 59
+	ChannelTypeHongNiao       = 60
 	ChannelTypeDummy          // this one is only for count, do not add any channel after this
 
 )
@@ -122,6 +123,7 @@ var ChannelBaseURLs = []string{
 	"https://chatgpt.com",                       //57
 	"https://api.xheai.cc",                      //58
 	"http://ai-studio.aixyzz.com/v1",            //59
+	"",                                          //60
 }
 
 var ChannelTypeNames = map[int]string{
@@ -181,6 +183,11 @@ var ChannelTypeNames = map[int]string{
 	ChannelTypeCodex:          "Codex",
 	ChannelTypeXingHe:         "XingHe",
 	ChannelTypeHuaying:        "Huaying",
+	ChannelTypeHongNiao:       "HongNiao",
+}
+
+func IsDedicatedVideoPollingChannel(channelType int) bool {
+	return channelType == ChannelTypeHuaying || channelType == ChannelTypeHongNiao
 }
 
 func GetChannelTypeName(channelType int) string {

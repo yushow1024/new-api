@@ -39,7 +39,7 @@ func (a *TaskAdaptor) Init(info *relaycommon.RelayInfo) {
 		a.channelType = info.ChannelMeta.ChannelType
 	}
 	a.baseURL = strings.TrimRight(info.ChannelBaseUrl, "/")
-	if a.channelType == constant.ChannelTypeHuaying {
+	if constant.IsDedicatedVideoPollingChannel(a.channelType) {
 		a.baseURL = normalizeHuayingBaseURL(a.baseURL)
 	}
 	a.apiKey = info.ApiKey
@@ -89,7 +89,7 @@ func (a *TaskAdaptor) ValidateRequestAndSetAction(c *gin.Context, info *relaycom
 }
 
 func (a *TaskAdaptor) EstimateBilling(c *gin.Context, info *relaycommon.RelayInfo) map[string]float64 {
-	// 画影/星河同时支持按次和按秒计费。只有显式配置为按秒计费时，
+	// 画影/星河/红鸟同时支持按次和按秒计费。只有显式配置为按秒计费时，
 	// duration 才是价格倍率；按次计费的 ModelPrice 不应再乘视频时长。
 	if info == nil || billing_setting.GetBillingMode(info.OriginModelName) != billing_setting.BillingModePerSecond {
 		return nil
@@ -113,6 +113,8 @@ func (a *TaskAdaptor) BuildRequestURL(_ *relaycommon.RelayInfo) (string, error) 
 	switch a.channelType {
 	case constant.ChannelTypeHuaying:
 		return a.baseURL + huayingSubmitPath, nil
+	case constant.ChannelTypeHongNiao:
+		return a.baseURL + hongNiaoSubmitPath, nil
 	case constant.ChannelTypeXingHe:
 		return a.baseURL + xingHeSubmitPath, nil
 	default:
@@ -158,9 +160,32 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 		payload["duration"] = duration
 		payload["resolution"] = normalized.Resolution
 		payload["aspectRatio"] = normalized.AspectRatio
+		setNormalizedMedia(payload, normalized.Images, normalized.Videos, normalized.Audios)
+		deleteHongNiaoAliases(payload)
 		delete(payload, "seconds")
 		delete(payload, "size")
 		delete(payload, "protect_stripe")
+	case constant.ChannelTypeHongNiao:
+		seconds, err := parseDurationSeconds(normalized.Duration)
+		if err != nil {
+			return nil, errors.Wrap(err, "convert duration to seconds failed")
+		}
+		payload["seconds"] = strconv.FormatFloat(seconds, 'f', -1, 64)
+		payload["resolution"] = normalized.Resolution
+		payload["aspect_ratio"] = normalized.AspectRatio
+		images := appendUniqueStrings(nil, stringValue(normalized.FirstFrame))
+		images = appendUniqueStrings(images, normalized.Images...)
+		images = appendUniqueStrings(images, stringValue(normalized.LastFrame))
+		setNormalizedMedia(payload, images, normalized.Videos, normalized.Audios)
+		mapHongNiaoRequestIDToMetadata(payload, normalized.RequestID)
+		delete(payload, "duration")
+		delete(payload, "aspectRatio")
+		delete(payload, "size")
+		delete(payload, "firstFrame")
+		delete(payload, "lastFrame")
+		delete(payload, "requestId")
+		delete(payload, "protect_stripe")
+		deleteMediaAliases(payload)
 	case constant.ChannelTypeXingHe:
 		seconds, err := parseDurationSeconds(normalized.Duration)
 		if err != nil {
@@ -228,7 +253,7 @@ func (a *TaskAdaptor) FetchTask(baseURL, key string, body map[string]any, proxy 
 	if !ok || strings.TrimSpace(taskID) == "" {
 		return nil, fmt.Errorf("invalid task_id")
 	}
-	if a.channelType != constant.ChannelTypeHuaying {
+	if !constant.IsDedicatedVideoPollingChannel(a.channelType) {
 		return nil, fmt.Errorf("channel %d does not expose an asynchronous task query endpoint", a.channelType)
 	}
 	uri := normalizeHuayingBaseURL(baseURL) + "/videos/" + url.PathEscape(taskID)
@@ -254,8 +279,8 @@ func (a *TaskAdaptor) FetchTask(baseURL, key string, body map[string]any, proxy 
 	return resp, nil
 }
 
-// normalizeHuayingBaseURL accepts both the documented API base URL ending in
-// /v1 and a bare origin URL. This is intentionally limited to an empty/root
+// normalizeHuayingBaseURL accepts Huaying/HongNiao base URLs ending in /v1
+// as well as bare origin URLs. This is intentionally limited to an empty/root
 // path so custom reverse-proxy prefixes remain untouched.
 func normalizeHuayingBaseURL(baseURL string) string {
 	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
@@ -325,7 +350,11 @@ func (a *TaskAdaptor) ConvertToOpenAIVideo(task *model.Task) ([]byte, error) {
 	setPublicTaskID(payload, task.TaskID)
 	switch task.Status {
 	case model.TaskStatusSuccess:
-		payload["status"] = "succeeded"
+		if a.channelType == constant.ChannelTypeHongNiao {
+			payload["status"] = "completed"
+		} else {
+			payload["status"] = "succeeded"
+		}
 	case model.TaskStatusFailure:
 		payload["status"] = "failed"
 		if _, exists := payload["error"]; !exists || payload["error"] == nil {
@@ -336,7 +365,11 @@ func (a *TaskAdaptor) ConvertToOpenAIVideo(task *model.Task) ([]byte, error) {
 			}
 		}
 	case model.TaskStatusQueued, model.TaskStatusSubmitted:
-		payload["status"] = "processing"
+		if a.channelType == constant.ChannelTypeHongNiao {
+			payload["status"] = "queued"
+		} else {
+			payload["status"] = "processing"
+		}
 	case model.TaskStatusInProgress, model.TaskStatusNotStart:
 		if strings.TrimSpace(findString(payload, "status")) == "" {
 			payload["status"] = "processing"
@@ -351,10 +384,14 @@ func (a *TaskAdaptor) ConvertToOpenAIVideo(task *model.Task) ([]byte, error) {
 func (a *TaskAdaptor) GetModelList() []string { return nil }
 
 func (a *TaskAdaptor) GetChannelName() string {
-	if a.channelType == constant.ChannelTypeXingHe {
+	switch a.channelType {
+	case constant.ChannelTypeXingHe:
 		return "xinghe-video"
+	case constant.ChannelTypeHongNiao:
+		return HongNiaoChannelName
+	default:
+		return ChannelName
 	}
-	return ChannelName
 }
 
 func parseDurationSeconds(raw json.RawMessage) (float64, error) {
@@ -387,6 +424,14 @@ func normalizeVideoGenerationRequest(req *VideoGenerationRequest) error {
 	if rawMessageMissing(req.Duration) && !rawMessageMissing(req.Seconds) {
 		req.Duration = append(json.RawMessage(nil), req.Seconds...)
 	}
+	if strings.TrimSpace(req.AspectRatio) == "" && req.AspectRatioSnake != nil {
+		req.AspectRatio = strings.TrimSpace(*req.AspectRatioSnake)
+	}
+	req.Images = appendUniqueStrings(req.Images, req.ImageURLs...)
+	req.Videos = appendUniqueStrings(req.Videos, req.VideoURLs...)
+	req.Videos = appendUniqueStrings(req.Videos, stringValue(req.VideoURL))
+	req.Audios = appendUniqueStrings(req.Audios, req.AudioURLs...)
+	req.Audios = appendUniqueStrings(req.Audios, stringValue(req.AudioURL))
 
 	if strings.TrimSpace(req.Resolution) == "" || strings.TrimSpace(req.AspectRatio) == "" {
 		size := strings.TrimSpace(req.Size)
@@ -404,6 +449,70 @@ func normalizeVideoGenerationRequest(req *VideoGenerationRequest) error {
 		}
 	}
 	return nil
+}
+
+func setNormalizedMedia(payload map[string]any, images, videos, audios []string) {
+	setStringSlice(payload, "images", images)
+	setStringSlice(payload, "videos", videos)
+	setStringSlice(payload, "audios", audios)
+}
+
+func setStringSlice(payload map[string]any, key string, values []string) {
+	if len(values) == 0 {
+		delete(payload, key)
+		return
+	}
+	payload[key] = values
+}
+
+func appendUniqueStrings(dst []string, values ...string) []string {
+	seen := make(map[string]struct{}, len(dst)+len(values))
+	result := make([]string, 0, len(dst)+len(values))
+	for _, value := range append(append([]string(nil), dst...), values...) {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	return result
+}
+
+func stringValue(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
+}
+
+func mapHongNiaoRequestIDToMetadata(payload map[string]any, requestID *string) {
+	requestIDValue := strings.TrimSpace(stringValue(requestID))
+	if requestIDValue == "" {
+		return
+	}
+	metadata, ok := payload["metadata"].(map[string]any)
+	if !ok {
+		metadata = map[string]any{}
+	}
+	if _, exists := metadata["request_id"]; !exists {
+		metadata["request_id"] = requestIDValue
+	}
+	payload["metadata"] = metadata
+}
+
+func deleteHongNiaoAliases(payload map[string]any) {
+	delete(payload, "aspect_ratio")
+	deleteMediaAliases(payload)
+}
+
+func deleteMediaAliases(payload map[string]any) {
+	for _, key := range []string{"image_urls", "video_urls", "video_url", "audio_urls", "audio_url"} {
+		delete(payload, key)
+	}
 }
 
 func rawMessageMissing(raw json.RawMessage) bool {

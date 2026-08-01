@@ -500,7 +500,7 @@ func RelayTask(c *gin.Context) {
 
 	var result *relay.TaskSubmitResult
 	var taskErr *dto.TaskError
-	var huayingReqData []byte
+	var dedicatedVideoReqData []byte
 	defer func() {
 		if taskErr != nil && relayInfo.Billing != nil {
 			relayInfo.Billing.Refund(c)
@@ -549,12 +549,12 @@ func RelayTask(c *gin.Context) {
 
 		result, taskErr = relay.RelayTaskSubmit(c, relayInfo)
 		if taskErr == nil {
-			if relayInfo.ChannelType == constant.ChannelTypeHuaying {
+			if constant.IsDedicatedVideoPollingChannel(relayInfo.ChannelType) {
 				body, readErr := bodyStorage.Bytes()
 				if readErr != nil {
-					common.SysError("read Huaying request body for task persistence failed: " + readErr.Error())
+					common.SysError("read dedicated video request body for task persistence failed: " + readErr.Error())
 				} else {
-					huayingReqData = append([]byte(nil), body...)
+					dedicatedVideoReqData = append([]byte(nil), body...)
 				}
 			}
 			break
@@ -601,8 +601,8 @@ func RelayTask(c *gin.Context) {
 		task.Quota = result.Quota
 		task.Data = result.TaskData
 		task.Action = relayInfo.Action
-		if relayInfo.ChannelType == constant.ChannelTypeHuaying {
-			task.ReqData = huayingReqData
+		if constant.IsDedicatedVideoPollingChannel(relayInfo.ChannelType) {
+			task.ReqData = dedicatedVideoReqData
 			task.LogId = logId
 		}
 		applyInitialTaskInfo(task, result.InitialTaskInfo)
@@ -612,9 +612,9 @@ func RelayTask(c *gin.Context) {
 			if task.Status == model.TaskStatusFailure && task.Quota != 0 {
 				service.RefundTaskQuota(c, task, task.FailReason)
 			}
-			if relayInfo.ChannelType == constant.ChannelTypeHuaying &&
+			if constant.IsDedicatedVideoPollingChannel(relayInfo.ChannelType) &&
 				task.Status != model.TaskStatusSuccess && task.Status != model.TaskStatusFailure {
-				service.EnqueueHuayingVideoTaskPolling(task.TaskID)
+				service.EnqueueDedicatedVideoTaskPolling(task.TaskID)
 			}
 		}
 	}

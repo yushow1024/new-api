@@ -94,6 +94,13 @@ func TestBuildRequestURL(t *testing.T) {
 	got, err = xinghe.BuildRequestURL(nil)
 	require.NoError(t, err)
 	require.Equal(t, "https://api.xheai.cc/api/generate-video", got)
+
+	for _, baseURL := range []string{"https://api.example.com", "https://api.example.com/", "https://api.example.com/v1/"} {
+		hongniao := newTestAdaptor(constant.ChannelTypeHongNiao, baseURL)
+		got, err = hongniao.BuildRequestURL(nil)
+		require.NoError(t, err)
+		require.Equal(t, "https://api.example.com/v1/videos", got)
+	}
 }
 
 func TestVideoGenerationRequestExamples(t *testing.T) {
@@ -191,6 +198,80 @@ func TestBuildHuayingBodyFromXingHeAliases(t *testing.T) {
 	require.NotContains(t, payload, "protect_stripe")
 }
 
+func TestBuildHongNiaoBodyFromUnifiedContract(t *testing.T) {
+	body := `{
+		"model":"sora-2",
+		"requestId":"order_10001",
+		"prompt":"cat on moon",
+		"duration":"10s",
+		"resolution":"720p",
+		"aspectRatio":"16:9",
+		"firstFrame":"https://example.com/start.png",
+		"lastFrame":"https://example.com/end.png",
+		"image_urls":["https://example.com/reference.png"],
+		"video_url":"https://example.com/reference.mp4",
+		"audio_urls":["https://example.com/reference.mp3"],
+		"metadata":{"source":"test"},
+		"parameters":{"camera_motion":"pan"}
+	}`
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos/generations", bytes.NewBufferString(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+	defer common.CleanupBodyStorage(c)
+
+	adaptor := newTestAdaptor(constant.ChannelTypeHongNiao, "https://api.example.com/v1")
+	info := &relaycommon.RelayInfo{TaskRelayInfo: &relaycommon.TaskRelayInfo{}}
+	require.Nil(t, adaptor.ValidateRequestAndSetAction(c, info))
+	require.Equal(t, constant.TaskActionGenerate, info.Action)
+
+	reader, err := adaptor.BuildRequestBody(c, &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "mapped-sora-2"}})
+	require.NoError(t, err)
+	upstreamBody, err := io.ReadAll(reader)
+	require.NoError(t, err)
+	var payload map[string]any
+	require.NoError(t, common.Unmarshal(upstreamBody, &payload))
+	require.Equal(t, "mapped-sora-2", payload["model"])
+	require.Equal(t, "10", payload["seconds"])
+	require.Equal(t, "720p", payload["resolution"])
+	require.Equal(t, "16:9", payload["aspect_ratio"])
+	require.Equal(t, []any{
+		"https://example.com/start.png",
+		"https://example.com/reference.png",
+		"https://example.com/end.png",
+	}, payload["images"])
+	require.Equal(t, []any{"https://example.com/reference.mp4"}, payload["videos"])
+	require.Equal(t, []any{"https://example.com/reference.mp3"}, payload["audios"])
+	require.Equal(t, map[string]any{"source": "test", "request_id": "order_10001"}, payload["metadata"])
+	require.Equal(t, map[string]any{"camera_motion": "pan"}, payload["parameters"])
+	for _, key := range []string{"duration", "aspectRatio", "firstFrame", "lastFrame", "requestId", "image_urls", "video_url", "audio_urls"} {
+		require.NotContains(t, payload, key)
+	}
+}
+
+func TestBuildHuayingBodyFromHongNiaoAliases(t *testing.T) {
+	body := `{"model":"seedance-2.0","prompt":"cat","seconds":"5","resolution":"720p","aspect_ratio":"9:16","image_urls":["https://example.com/1.png"]}`
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos/generations", bytes.NewBufferString(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+	defer common.CleanupBodyStorage(c)
+
+	adaptor := newTestAdaptor(constant.ChannelTypeHuaying, "http://example.com/v1")
+	info := &relaycommon.RelayInfo{TaskRelayInfo: &relaycommon.TaskRelayInfo{}}
+	require.Nil(t, adaptor.ValidateRequestAndSetAction(c, info))
+
+	reader, err := adaptor.BuildRequestBody(c, &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "seedance-2.0"}})
+	require.NoError(t, err)
+	upstreamBody, err := io.ReadAll(reader)
+	require.NoError(t, err)
+	var payload map[string]any
+	require.NoError(t, common.Unmarshal(upstreamBody, &payload))
+	require.Equal(t, "5", payload["duration"])
+	require.Equal(t, "9:16", payload["aspectRatio"])
+	require.Equal(t, []any{"https://example.com/1.png"}, payload["images"])
+	require.NotContains(t, payload, "aspect_ratio")
+	require.NotContains(t, payload, "image_urls")
+}
+
 func TestBuildXingHeBodyFromHuayingContract(t *testing.T) {
 	body := `{"model":"seedance-2.0","prompt":"cat on moon","duration":"5s","resolution":"720p","aspectRatio":"9:16"}`
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
@@ -253,6 +334,40 @@ func TestConvertToOpenAIVideoUsesPublicTaskID(t *testing.T) {
 	require.NotContains(t, string(body), "job_secret")
 }
 
+func TestConvertHongNiaoToOpenAIVideoUsesQueuedStatus(t *testing.T) {
+	adaptor := newTestAdaptor(constant.ChannelTypeHongNiao, "http://example.com/v1")
+	task := &model.Task{
+		TaskID: "task_public",
+		Status: model.TaskStatusQueued,
+		Data:   json.RawMessage(`{"id":"task_secret","status":"queued","progress":0}`),
+	}
+
+	body, err := adaptor.ConvertToOpenAIVideo(task)
+	require.NoError(t, err)
+	var payload map[string]any
+	require.NoError(t, common.Unmarshal(body, &payload))
+	require.Equal(t, "task_public", payload["id"])
+	require.Equal(t, "queued", payload["status"])
+	require.NotContains(t, string(body), "task_secret")
+}
+func TestConvertHongNiaoToOpenAIVideoUsesCompletedStatus(t *testing.T) {
+	adaptor := newTestAdaptor(constant.ChannelTypeHongNiao, "http://example.com/v1")
+	task := &model.Task{
+		TaskID: "task_public",
+		Status: model.TaskStatusSuccess,
+		Data:   json.RawMessage(`{"id":"task_secret","status":"completed","video_url":"https://example.com/video.mp4"}`),
+	}
+
+	body, err := adaptor.ConvertToOpenAIVideo(task)
+	require.NoError(t, err)
+	var payload map[string]any
+	require.NoError(t, common.Unmarshal(body, &payload))
+	require.Equal(t, "task_public", payload["id"])
+	require.Equal(t, "completed", payload["status"])
+	require.Equal(t, "https://example.com/video.mp4", payload["video_url"])
+	require.NotContains(t, string(body), "task_secret")
+}
+
 func TestFetchTask(t *testing.T) {
 	service.InitHttpClient()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -264,9 +379,11 @@ func TestFetchTask(t *testing.T) {
 	}))
 	defer server.Close()
 
-	adaptor := newTestAdaptor(constant.ChannelTypeHuaying, server.URL+"/v1")
-	resp, err := adaptor.FetchTask(server.URL, "polling-key", map[string]any{"task_id": "job_123"}, "")
-	require.NoError(t, err)
-	defer resp.Body.Close()
-	require.Equal(t, http.StatusOK, resp.StatusCode)
+	for _, channelType := range []int{constant.ChannelTypeHuaying, constant.ChannelTypeHongNiao} {
+		adaptor := newTestAdaptor(channelType, server.URL+"/v1")
+		resp, err := adaptor.FetchTask(server.URL, "polling-key", map[string]any{"task_id": "job_123"}, "")
+		require.NoError(t, err)
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+		require.NoError(t, resp.Body.Close())
+	}
 }
