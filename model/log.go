@@ -423,7 +423,7 @@ func GetAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelName
 
 const logSearchCountLimit = 10000
 
-func GetUserLogs(userId int, logType int, startTimestamp int64, endTimestamp int64, modelName string, tokenName string, startIdx int, num int, group string, requestId string, upstreamRequestId string) (logs []*Log, total int64, err error) {
+func buildUserLogsQuery(userId int, logType int, startTimestamp int64, endTimestamp int64, modelName string, tokenName string, group string, requestId string, upstreamRequestId string) (*gorm.DB, error) {
 	var tx *gorm.DB
 	if logType == LogTypeUnknown {
 		tx = LOG_DB.Where("logs.user_id = ?", userId)
@@ -431,8 +431,9 @@ func GetUserLogs(userId int, logType int, startTimestamp int64, endTimestamp int
 		tx = LOG_DB.Where("logs.user_id = ? and logs.type = ?", userId, logType)
 	}
 
+	var err error
 	if tx, err = applyExplicitLogTextFilter(tx, "logs.model_name", modelName); err != nil {
-		return nil, 0, err
+		return nil, err
 	}
 	if tokenName != "" {
 		tx = tx.Where("logs.token_name = ?", tokenName)
@@ -452,6 +453,15 @@ func GetUserLogs(userId int, logType int, startTimestamp int64, endTimestamp int
 	if group != "" {
 		tx = tx.Where("logs."+logGroupCol+" = ?", group)
 	}
+	return tx, nil
+}
+
+func GetUserLogs(userId int, logType int, startTimestamp int64, endTimestamp int64, modelName string, tokenName string, startIdx int, num int, group string, requestId string, upstreamRequestId string) (logs []*Log, total int64, err error) {
+	tx, err := buildUserLogsQuery(userId, logType, startTimestamp, endTimestamp, modelName, tokenName, group, requestId, upstreamRequestId)
+	if err != nil {
+		return nil, 0, err
+	}
+
 	err = tx.Model(&Log{}).Limit(logSearchCountLimit).Count(&total).Error
 	if err != nil {
 		common.SysError("failed to count user logs: " + err.Error())
@@ -464,7 +474,63 @@ func GetUserLogs(userId int, logType int, startTimestamp int64, endTimestamp int
 	}
 
 	formatUserLogs(logs, startIdx)
-	return logs, total, err
+	return logs, total, nil
+}
+
+type UserLogTaskItem struct {
+	Log  *Log
+	Task *Task
+}
+
+func GetUserTaskLogs(userId int, logType int, startTimestamp int64, endTimestamp int64, modelName string, tokenName string, startIdx int, num int, group string, requestId string, upstreamRequestId string) (items []*UserLogTaskItem, total int64, err error) {
+	tx, err := buildUserLogsQuery(userId, logType, startTimestamp, endTimestamp, modelName, tokenName, group, requestId, upstreamRequestId)
+	if err != nil {
+		return nil, 0, err
+	}
+	if err = tx.Model(&Log{}).Limit(logSearchCountLimit).Count(&total).Error; err != nil {
+		common.SysError("failed to count user task logs: " + err.Error())
+		return nil, 0, errors.New("查询任务日志失败")
+	}
+
+	var logs []*Log
+	if err = tx.Order("logs.id desc").Limit(num).Offset(startIdx).Find(&logs).Error; err != nil {
+		common.SysError("failed to search user task logs: " + err.Error())
+		return nil, 0, errors.New("查询任务日志失败")
+	}
+	if len(logs) == 0 {
+		return []*UserLogTaskItem{}, total, nil
+	}
+
+	pageLogIds := make([]int, 0, len(logs))
+	for _, log := range logs {
+		pageLogIds = append(pageLogIds, log.Id)
+	}
+
+	var tasks []*Task
+	if err = DB.Where("user_id = ? AND log_id IN ?", userId, pageLogIds).
+		Omit("channel_id", "private_data").
+		Order("id desc").
+		Find(&tasks).Error; err != nil {
+		common.SysError("failed to query tasks for user logs: " + err.Error())
+		return nil, 0, errors.New("查询任务日志失败")
+	}
+
+	taskByLogId := make(map[int]*Task, len(tasks))
+	for _, task := range tasks {
+		if _, exists := taskByLogId[task.LogId]; !exists {
+			taskByLogId[task.LogId] = task
+		}
+	}
+
+	items = make([]*UserLogTaskItem, 0, len(logs))
+	for _, log := range logs {
+		items = append(items, &UserLogTaskItem{
+			Log:  log,
+			Task: taskByLogId[log.Id],
+		})
+	}
+	formatUserLogs(logs, startIdx)
+	return items, total, nil
 }
 
 type Stat struct {

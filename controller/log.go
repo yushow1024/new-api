@@ -5,7 +5,9 @@ import (
 	"strconv"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/relay"
 
 	"github.com/gin-gonic/gin"
 )
@@ -53,6 +55,46 @@ func GetUserLogs(c *gin.Context) {
 	pageInfo.SetItems(logs)
 	common.ApiSuccess(c, pageInfo)
 	return
+}
+
+type userLogTaskResponse struct {
+	*model.Log
+	Task *dto.TaskDto `json:"task"`
+}
+
+func GetUserTaskLogs(c *gin.Context) {
+	pageInfo := common.GetPageQuery(c)
+	userId := c.GetInt("id")
+	logType, _ := strconv.Atoi(c.Query("type"))
+	startTimestamp, _ := strconv.ParseInt(c.Query("start_timestamp"), 10, 64)
+	endTimestamp, _ := strconv.ParseInt(c.Query("end_timestamp"), 10, 64)
+	tokenName := c.Query("token_name")
+	modelName := c.Query("model_name")
+	group := c.Query("group")
+	requestId := c.Query("request_id")
+	upstreamRequestId := c.Query("upstream_request_id")
+
+	items, total, err := model.GetUserTaskLogs(userId, logType, startTimestamp, endTimestamp, modelName, tokenName, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), group, requestId, upstreamRequestId)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+
+	responses := make([]*userLogTaskResponse, 0, len(items))
+	for _, item := range items {
+		var task *dto.TaskDto
+		if item.Task != nil {
+			task = relay.TaskModel2Dto(item.Task)
+		}
+		responses = append(responses, &userLogTaskResponse{
+			Log:  item.Log,
+			Task: task,
+		})
+	}
+
+	pageInfo.SetTotal(int(total))
+	pageInfo.SetItems(responses)
+	common.ApiSuccess(c, pageInfo)
 }
 
 // Deprecated: SearchAllLogs 已废弃，前端未使用该接口。

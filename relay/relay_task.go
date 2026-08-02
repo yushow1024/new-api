@@ -595,5 +595,6 @@ func TaskModel2Dto(task *model.Task) *dto.TaskDto {
 		Properties: task.Properties,
 		Username:   task.Username,
 		Data:       task.Data,
+		ReqData:    task.ReqData,
 	}
 }
