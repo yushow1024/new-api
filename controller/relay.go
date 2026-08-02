@@ -123,6 +123,16 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		return
 	}
 
+	if relayInfo.RelayMode == relayconstant.RelayModeImagesGenerations {
+		if bodyStorage, bodyErr := common.GetBodyStorage(c); bodyErr != nil {
+			logger.LogWarn(c, "failed to get image generation request body for log: "+bodyErr.Error())
+		} else if requestBody, bodyErr := bodyStorage.Bytes(); bodyErr != nil {
+			logger.LogWarn(c, "failed to read image generation request body for log: "+bodyErr.Error())
+		} else {
+			common.SetContextKey(c, constant.ContextKeyLogRequestData, string(requestBody))
+		}
+		common.StartResponseBodyCapture(c)
+	}
 	needSensitiveCheck := setting.ShouldCheckPromptSensitive()
 	needCountToken := constant.CountToken
 	// Avoid building huge CombineText (strings.Join) when token counting and sensitive check are both disabled.
