@@ -14,6 +14,25 @@ type OpenAIModels struct {
 	OwnedBy                string                  `json:"owned_by"`
 	Ext                    json.RawMessage         `json:"ext,omitempty"`
 	SupportedEndpointTypes []constant.EndpointType `json:"supported_endpoint_types"`
+	Price                  *OpenAIModelPrice       `json:"price,omitempty"`
+}
+
+// OpenAIModelPrice contains the pricing configuration exposed by /v1/models.
+// Pointer fields preserve explicit zero values while allowing an empty price object.
+type OpenAIModelPrice struct {
+	QuotaType            *int     `json:"quota_type,omitempty"`
+	ModelRatio           *float64 `json:"model_ratio,omitempty"`
+	ModelPrice           *float64 `json:"model_price,omitempty"`
+	CompletionRatio      *float64 `json:"completion_ratio,omitempty"`
+	CacheRatio           *float64 `json:"cache_ratio,omitempty"`
+	CreateCacheRatio     *float64 `json:"create_cache_ratio,omitempty"`
+	ImageRatio           *float64 `json:"image_ratio,omitempty"`
+	AudioRatio           *float64 `json:"audio_ratio,omitempty"`
+	AudioCompletionRatio *float64 `json:"audio_completion_ratio,omitempty"`
+	BillingMode          string   `json:"billing_mode,omitempty"`
+	BillingExpr          string   `json:"billing_expr,omitempty"`
+	PerSecondPrice       *float64 `json:"billing_per_second_price,omitempty"`
+	PerSecondRules       string   `json:"billing_per_second_rules,omitempty"`
 }
 
 type AnthropicModel struct {

@@ -169,6 +169,33 @@ func buildOpenAIModel(modelName string, ownerByModel map[string]string) dto.Open
 	return oaiModel
 }
 
+func buildOpenAIModelPrice(pricing model.Pricing) dto.OpenAIModelPrice {
+	return dto.OpenAIModelPrice{
+		QuotaType:            &pricing.QuotaType,
+		ModelRatio:           &pricing.ModelRatio,
+		ModelPrice:           &pricing.ModelPrice,
+		CompletionRatio:      &pricing.CompletionRatio,
+		CacheRatio:           pricing.CacheRatio,
+		CreateCacheRatio:     pricing.CreateCacheRatio,
+		ImageRatio:           pricing.ImageRatio,
+		AudioRatio:           pricing.AudioRatio,
+		AudioCompletionRatio: pricing.AudioCompletionRatio,
+		BillingMode:          pricing.BillingMode,
+		BillingExpr:          pricing.BillingExpr,
+		PerSecondPrice:       pricing.PerSecondPrice,
+		PerSecondRules:       pricing.PerSecondRules,
+	}
+}
+
+func getOpenAIModelPriceMap() map[string]dto.OpenAIModelPrice {
+	pricing := model.GetPricing()
+	priceByModel := make(map[string]dto.OpenAIModelPrice, len(pricing))
+	for _, item := range pricing {
+		priceByModel[item.ModelName] = buildOpenAIModelPrice(item)
+	}
+	return priceByModel
+}
+
 type modelListGroups struct {
 	userGroup   string
 	tokenGroup  string
@@ -277,10 +304,18 @@ func ListModels(c *gin.Context, modelType int) {
 		common.SysLog(fmt.Sprintf("GetModelExtMap error: %v", err))
 		extByModel = nil
 	}
+	priceByModel := map[string]dto.OpenAIModelPrice{}
+	if modelType == constant.ChannelTypeOpenAI {
+		priceByModel = getOpenAIModelPriceMap()
+	}
 	userOpenAiModels := make([]dto.OpenAIModels, 0, len(userModelNames))
 	for _, modelName := range userModelNames {
 		modelItem := buildOpenAIModel(modelName, ownerByModel)
 		modelItem.Ext = extByModel[modelName]
+		if modelType == constant.ChannelTypeOpenAI {
+			price := priceByModel[modelName]
+			modelItem.Price = &price
+		}
 		userOpenAiModels = append(userOpenAiModels, modelItem)
 	}
 

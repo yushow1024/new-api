@@ -12,6 +12,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/QuantumNous/new-api/setting/config"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
@@ -120,6 +121,40 @@ func withTieredBillingConfig(t *testing.T, modes map[string]string, exprs map[st
 	model.InvalidatePricingCache()
 }
 
+func withPerSecondBillingConfig(t *testing.T, prices map[string]float64, rules map[string]string) {
+	t.Helper()
+
+	saved := map[string]string{}
+	require.NoError(t, config.GlobalConfig.SaveToDB(func(key, value string) error {
+		if strings.HasPrefix(key, "billing_setting.") {
+			saved[key] = value
+		}
+		return nil
+	}))
+	t.Cleanup(func() {
+		require.NoError(t, config.GlobalConfig.LoadFromDB(saved))
+		model.InvalidatePricingCache()
+	})
+
+	modes := make(map[string]string, len(prices))
+	for modelName := range prices {
+		modes[modelName] = billing_setting.BillingModePerSecond
+	}
+	modeBytes, err := common.Marshal(modes)
+	require.NoError(t, err)
+	priceBytes, err := common.Marshal(prices)
+	require.NoError(t, err)
+	ruleBytes, err := common.Marshal(rules)
+	require.NoError(t, err)
+
+	require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{
+		"billing_setting.billing_mode":             string(modeBytes),
+		"billing_setting.billing_per_second_price": string(priceBytes),
+		"billing_setting.billing_per_second_rules": string(ruleBytes),
+	}))
+	model.InvalidatePricingCache()
+}
+
 func withSelfUseModeDisabled(t *testing.T) {
 	t.Helper()
 
@@ -220,6 +255,7 @@ func TestListModelsTokenLimitIncludesTieredBillingModel(t *testing.T) {
 		"zz-token-tiered-visible-model":    `tier("base", p * 1 + c * 2)`,
 		"zz-token-tiered-empty-expr-model": "",
 	})
+	setupModelListControllerTestDB(t)
 
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
@@ -288,4 +324,66 @@ func TestListModelsReturnsConfiguredExtAsJSON(t *testing.T) {
 		return
 	}
 	t.Fatal("zz-ext-model not found in /v1/models response")
+}
+
+func TestListModelsReturnsPerSecondPrice(t *testing.T) {
+	withSelfUseModeDisabled(t)
+	withPerSecondBillingConfig(t, map[string]float64{
+		"zz-per-second-model": 0,
+	}, map[string]string{
+		"zz-per-second-model": `param("resolution") == "1080p" ? 1.5 : 1`,
+	})
+
+	db := setupModelListControllerTestDB(t)
+	require.NoError(t, db.Create(&model.User{
+		Id:       1003,
+		Username: "model-price-user",
+		Password: "password",
+		Group:    "default",
+		Status:   common.UserStatusEnabled,
+	}).Error)
+	require.NoError(t, db.Create(&model.Ability{
+		Group:     "default",
+		Model:     "zz-per-second-model",
+		ChannelId: 1,
+		Enabled:   true,
+	}).Error)
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	ctx.Set("id", 1003)
+
+	ListModels(ctx, constant.ChannelTypeOpenAI)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	var payload listModelsResponse
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &payload))
+	require.True(t, payload.Success)
+
+	for _, item := range payload.Data {
+		if item.Id != "zz-per-second-model" {
+			continue
+		}
+		require.NotNil(t, item.Price)
+		require.NotNil(t, item.Price.QuotaType)
+		require.Equal(t, 1, *item.Price.QuotaType)
+		require.NotNil(t, item.Price.ModelPrice)
+		require.Zero(t, *item.Price.ModelPrice)
+		require.Equal(t, billing_setting.BillingModePerSecond, item.Price.BillingMode)
+		require.NotNil(t, item.Price.PerSecondPrice)
+		require.Zero(t, *item.Price.PerSecondPrice)
+		require.Equal(t, `param("resolution") == "1080p" ? 1.5 : 1`, item.Price.PerSecondRules)
+
+		priceJSON, err := common.Marshal(item.Price)
+		require.NoError(t, err)
+		var pricePayload map[string]any
+		require.NoError(t, common.Unmarshal(priceJSON, &pricePayload))
+		require.Contains(t, pricePayload, "model_price")
+		require.Zero(t, pricePayload["model_price"])
+		require.Contains(t, pricePayload, "billing_per_second_price")
+		require.Zero(t, pricePayload["billing_per_second_price"])
+		return
+	}
+	t.Fatal("zz-per-second-model not found in /v1/models response")
 }
