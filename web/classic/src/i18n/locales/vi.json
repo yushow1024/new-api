@@ -1639,6 +1639,7 @@
     "按次：{{symbol}}{{price}}": "Theo lượt gọi: {{symbol}}{{price}}",
     "按次：{{symbol}}{{price}} * {{ratioType}}：{{ratio}} = {{symbol}}{{total}}": "Theo lượt gọi: {{symbol}}{{price}} * {{ratioType}}: {{ratio}} = {{symbol}}{{total}}",
     "按次计费": "Tính phí theo lượt gọi",
+    "按秒计费": "Tính phí theo giây",
     "按照如下格式输入：AccessKey|SecretAccessKey|Region": "Enter in the format: AccessKey|SecretAccessKey|Region",
     "按量计费": "Trả tiền theo mức sử dụng",
     "按量计费下需要先填写输入价格，才能保存其它价格项。": "Ở chế độ tính phí theo lượng, cần điền giá đầu vào trước thì mới lưu được các mục giá khác.",

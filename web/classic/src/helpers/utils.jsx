@@ -656,6 +656,20 @@ export const calculateModelPrice = ({
   }
 
   // 3. 根据计费类型计算价格
+  if (record.billing_mode === 'per_second') {
+    const rawPrice = record.billing_per_second_price ?? record.model_price;
+    const priceUSD = Number(rawPrice) * usedGroupRatio;
+
+    return {
+      price: Number.isFinite(priceUSD) ? displayPrice(priceUSD) : '-',
+      isPerSecond: true,
+      isPerToken: false,
+      isTokensDisplay: false,
+      usedGroup,
+      usedGroupRatio,
+    };
+  }
+
   if (record.quota_type === 0) {
     // 按量计费
     const isTokensDisplay = quotaDisplayType === 'TOKENS';
@@ -784,6 +798,17 @@ export const getModelPriceItems = (
         value: '',
         suffix: '',
         isDynamic: true,
+      },
+    ];
+  }
+
+  if (priceData.isPerSecond) {
+    return [
+      {
+        key: 'per-second',
+        label: t('模型价格'),
+        value: priceData.price,
+        suffix: ` / ${t('秒')}`,
       },
     ];
   }
