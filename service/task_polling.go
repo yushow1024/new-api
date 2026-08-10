@@ -39,7 +39,7 @@ var GetTaskAdaptorFunc func(platform constant.TaskPlatform) TaskPollingAdaptor
 
 const (
 	dedicatedVideoTaskPollingInterval = 5 * time.Second
-	dedicatedVideoTaskPollingTimeout  = 10 * time.Minute
+	dedicatedVideoTaskPollingTimeout  = 60 * time.Minute
 )
 
 var dedicatedVideoPollingTasks sync.Map
