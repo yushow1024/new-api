@@ -31,7 +31,7 @@ func TestGetUserTaskLogsWithSeparateDatabases(t *testing.T) {
 	})
 
 	unlinked := &Log{UserId: 7, ModelName: "unlinked", Other: "{}"}
-	linked := &Log{UserId: 7, ModelName: "video-model", Other: "{}"}
+	linked := &Log{UserId: 7, ModelName: "video-model", IsRefunded: true, Other: "{}"}
 	otherUserLog := &Log{UserId: 8, ModelName: "other-user", Other: "{}"}
 	if err := logDB.Create(unlinked).Error; err != nil {
 		t.Fatalf("create unlinked log: %v", err)
@@ -74,6 +74,9 @@ func TestGetUserTaskLogsWithSeparateDatabases(t *testing.T) {
 	}
 	if items[0].Log.Id != 1 {
 		t.Fatalf("first formatted log id = %d, want 1", items[0].Log.Id)
+	}
+	if !items[0].Log.IsRefunded {
+		t.Fatal("linked log should return is_refunded=true")
 	}
 	if items[0].Task == nil || items[0].Task.TaskID != "task_linked" {
 		t.Fatalf("unexpected linked task: %#v", items[0].Task)

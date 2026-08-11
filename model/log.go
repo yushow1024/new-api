@@ -42,6 +42,7 @@ type Log struct {
 	TokenName         string  `json:"token_name" gorm:"index;default:''"`
 	ModelName         string  `json:"model_name" gorm:"index;index:index_username_model_name,priority:1;default:''"`
 	Quota             int     `json:"quota" gorm:"default:0"`
+	IsRefunded        bool    `json:"is_refunded" gorm:"default:false"`
 	PromptTokens      int     `json:"prompt_tokens" gorm:"default:0"`
 	CompletionTokens  int     `json:"completion_tokens" gorm:"default:0"`
 	UseTime           int     `json:"use_time" gorm:"default:0"`
@@ -95,6 +96,13 @@ func GetLogByTokenId(tokenId int) (logs []*Log, err error) {
 	err = LOG_DB.Model(&Log{}).Where("token_id = ?", tokenId).Order("id desc").Limit(common.MaxRecentItems).Find(&logs).Error
 	formatUserLogs(logs, 0)
 	return logs, err
+}
+
+func MarkLogRefunded(logId int) error {
+	if logId <= 0 {
+		return nil
+	}
+	return LOG_DB.Model(&Log{}).Where("id = ?", logId).Update("is_refunded", true).Error
 }
 
 func RecordLog(userId int, logType int, content string) {

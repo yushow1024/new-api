@@ -200,7 +200,10 @@ func TestRefundTaskQuota_Wallet(t *testing.T) {
 	seedToken(t, tokenID, userID, "sk-test-key", tokenRemain)
 	seedChannel(t, channelID)
 
+	consumeLog := &model.Log{UserId: userID, Type: model.LogTypeConsume}
+	require.NoError(t, model.LOG_DB.Create(consumeLog).Error)
 	task := makeTask(userID, channelID, preConsumed, tokenID, BillingSourceWallet, 0)
+	task.LogId = consumeLog.Id
 
 	RefundTaskQuota(ctx, task, "task failed: upstream error")
 
@@ -217,6 +220,10 @@ func TestRefundTaskQuota_Wallet(t *testing.T) {
 	assert.Equal(t, model.LogTypeRefund, log.Type)
 	assert.Equal(t, preConsumed, log.Quota)
 	assert.Equal(t, "test-model", log.ModelName)
+
+	var refundedLog model.Log
+	require.NoError(t, model.LOG_DB.First(&refundedLog, consumeLog.Id).Error)
+	assert.True(t, refundedLog.IsRefunded)
 }
 
 func TestRefundTaskQuota_Subscription(t *testing.T) {
@@ -339,7 +346,10 @@ func TestRecalculate_NegativeDelta(t *testing.T) {
 	seedToken(t, tokenID, userID, "sk-recalc-neg", tokenRemain)
 	seedChannel(t, channelID)
 
+	consumeLog := &model.Log{UserId: userID, Type: model.LogTypeConsume}
+	require.NoError(t, model.LOG_DB.Create(consumeLog).Error)
 	task := makeTask(userID, channelID, preConsumed, tokenID, BillingSourceWallet, 0)
+	task.LogId = consumeLog.Id
 
 	RecalculateTaskQuota(ctx, task, actualQuota, "adaptor adjustment")
 
@@ -357,6 +367,10 @@ func TestRecalculate_NegativeDelta(t *testing.T) {
 	require.NotNil(t, log)
 	assert.Equal(t, model.LogTypeRefund, log.Type)
 	assert.Equal(t, preConsumed-actualQuota, log.Quota)
+
+	var refundedLog model.Log
+	require.NoError(t, model.LOG_DB.First(&refundedLog, consumeLog.Id).Error)
+	assert.True(t, refundedLog.IsRefunded)
 }
 
 func TestRecalculate_ZeroDelta(t *testing.T) {

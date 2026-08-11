@@ -149,6 +149,12 @@ func taskModelName(task *model.Task) string {
 	return task.Properties.OriginModelName
 }
 
+func markTaskLogRefunded(ctx context.Context, task *model.Task) {
+	if err := model.MarkLogRefunded(task.LogId); err != nil {
+		logger.LogWarn(ctx, fmt.Sprintf("failed to mark task log refunded, task %s: %s", task.TaskID, err.Error()))
+	}
+}
+
 // RefundTaskQuota 统一的任务失败退款逻辑。
 // 当异步任务失败时，将预扣的 quota 退还给用户（支持钱包和订阅），并退还令牌额度。
 func RefundTaskQuota(ctx context.Context, task *model.Task, reason string) {
@@ -165,6 +171,7 @@ func RefundTaskQuota(ctx context.Context, task *model.Task, reason string) {
 
 	// 2. 退还令牌额度
 	taskAdjustTokenQuota(ctx, task, -quota)
+	markTaskLogRefunded(ctx, task)
 
 	// 3. 记录日志
 	other := taskBillingOther(task)
@@ -228,6 +235,7 @@ func RecalculateTaskQuota(ctx context.Context, task *model.Task, actualQuota int
 	} else {
 		logType = model.LogTypeRefund
 		logQuota = -quotaDelta
+		markTaskLogRefunded(ctx, task)
 	}
 	other := taskBillingOther(task)
 	other["task_id"] = task.TaskID
