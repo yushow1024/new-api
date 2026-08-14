@@ -105,6 +105,13 @@ func MarkLogRefunded(logId int) error {
 	return LOG_DB.Model(&Log{}).Where("id = ?", logId).Update("is_refunded", true).Error
 }
 
+func UpdateLogResData(logId int, resData LogData) error {
+	if logId <= 0 || LOG_DB == nil {
+		return nil
+	}
+	return LOG_DB.Model(&Log{}).Where("id = ?", logId).Update("res_data", resData).Error
+}
+
 func RecordLog(userId int, logType int, content string) {
 	if logType == LogTypeConsume && !common.LogConsumeEnabled {
 		return

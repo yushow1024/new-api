@@ -769,6 +769,7 @@ type TaskInfo struct {
 	Status           string `json:"status"`
 	Reason           string `json:"reason,omitempty"`
 	Url              string `json:"url,omitempty"`
+	CoverUrl         string `json:"cover_url,omitempty"`
 	RemoteUrl        string `json:"remote_url,omitempty"`
 	Progress         string `json:"progress,omitempty"`
 	CompletionTokens int    `json:"completion_tokens,omitempty"` // 用于按倍率计费

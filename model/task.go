@@ -102,6 +102,7 @@ type TaskPrivateData struct {
 	Key            string `json:"key,omitempty"`
 	UpstreamTaskID string `json:"upstream_task_id,omitempty"` // 上游真实 task ID
 	ResultURL      string `json:"result_url,omitempty"`       // 任务成功后的结果 URL（视频地址等）
+	CoverURL       string `json:"cover_url,omitempty"`        // Persisted generated video cover URL
 	// 计费上下文：用于异步退款/差额结算（轮询阶段读取）
 	BillingSource  string              `json:"billing_source,omitempty"`  // "wallet" 或 "subscription"
 	SubscriptionId int                 `json:"subscription_id,omitempty"` // 订阅 ID，用于订阅退款
@@ -135,6 +136,10 @@ func (t *Task) GetResultURL() string {
 		return t.PrivateData.ResultURL
 	}
 	return t.FailReason
+}
+
+func (t *Task) GetCoverURL() string {
+	return t.PrivateData.CoverURL
 }
 
 // GenerateTaskID 生成对外暴露的 task_xxxx 格式 ID
@@ -175,9 +180,14 @@ func InitTask(platform constant.TaskPlatform, relayInfo *commonRelay.RelayInfo) 
 	properties := Properties{}
 	privateData := TaskPrivateData{}
 	if relayInfo != nil && relayInfo.ChannelMeta != nil {
-		if relayInfo.ChannelMeta.ChannelType == constant.ChannelTypeGemini ||
-			relayInfo.ChannelMeta.ChannelType == constant.ChannelTypeVertexAi ||
-			constant.IsDedicatedVideoPollingChannel(relayInfo.ChannelMeta.ChannelType) {
+		// Store the exact selected key because some video result downloads require authentication.
+		// Multi-key channels must not fall back to the channel primary key during polling.
+		channelType := relayInfo.ChannelMeta.ChannelType
+		if channelType == constant.ChannelTypeOpenAI ||
+			channelType == constant.ChannelTypeSora ||
+			channelType == constant.ChannelTypeGemini ||
+			channelType == constant.ChannelTypeVertexAi ||
+			constant.IsDedicatedVideoPollingChannel(channelType) {
 			privateData.Key = relayInfo.ChannelMeta.ApiKey
 		}
 		if relayInfo.UpstreamModelName != "" {
@@ -366,6 +376,10 @@ func (Task *Task) Insert() error {
 	return err
 }
 
+func (Task *Task) UpdateLogId() error {
+	return DB.Model(Task).Update("log_id", Task.LogId).Error
+}
+
 type taskSnapshot struct {
 	Status     TaskStatus
 	Progress   string
@@ -373,6 +387,7 @@ type taskSnapshot struct {
 	FinishTime int64
 	FailReason string
 	ResultURL  string
+	CoverURL   string
 	Data       json.RawMessage
 }
 
@@ -383,6 +398,7 @@ func (s taskSnapshot) Equal(other taskSnapshot) bool {
 		s.FinishTime == other.FinishTime &&
 		s.FailReason == other.FailReason &&
 		s.ResultURL == other.ResultURL &&
+		s.CoverURL == other.CoverURL &&
 		bytes.Equal(s.Data, other.Data)
 }
 
@@ -394,6 +410,7 @@ func (t *Task) Snapshot() taskSnapshot {
 		FinishTime: t.FinishTime,
 		FailReason: t.FailReason,
 		ResultURL:  t.PrivateData.ResultURL,
+		CoverURL:   t.PrivateData.CoverURL,
 		Data:       t.Data,
 	}
 }
@@ -413,6 +430,16 @@ func (Task *Task) Update() error {
 // zero rows, which silently bypasses the CAS guard.
 func (t *Task) UpdateWithStatus(fromStatus TaskStatus) (bool, error) {
 	result := DB.Model(t).Where("status = ?", fromStatus).Select("*").Updates(t)
+	if result.Error != nil {
+		return false, result.Error
+	}
+	return result.RowsAffected > 0, nil
+}
+
+// UpdateDataWithStatus updates only the latest upstream response while the task
+// remains in the expected state. It must not transition status or trigger billing.
+func (t *Task) UpdateDataWithStatus(fromStatus TaskStatus) (bool, error) {
+	result := DB.Model(t).Where("status = ?", fromStatus).Update("data", t.Data)
 	if result.Error != nil {
 		return false, result.Error
 	}
@@ -518,5 +545,8 @@ func (t *Task) ToOpenAIVideo() *dto.OpenAIVideo {
 	openAIVideo.CreatedAt = t.CreatedAt
 	openAIVideo.CompletedAt = t.UpdatedAt
 	openAIVideo.SetMetadata("url", t.GetResultURL())
+	if t.GetCoverURL() != "" {
+		openAIVideo.SetMetadata("cover_url", t.GetCoverURL())
+	}
 	return openAIVideo
 }

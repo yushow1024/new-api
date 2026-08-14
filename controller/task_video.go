@@ -15,6 +15,7 @@ import (
 	"github.com/QuantumNous/new-api/relay"
 	"github.com/QuantumNous/new-api/relay/channel"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 )
 
@@ -106,15 +107,15 @@ func updateVideoSingleTask(ctx context.Context, adaptor channel.TaskAdaptor, cha
 		t := responseItems.Data
 		taskResult.TaskID = t.TaskID
 		taskResult.Status = string(t.Status)
-		taskResult.Url = t.FailReason
+		taskResult.Url = t.GetResultURL()
+		taskResult.CoverUrl = t.GetCoverURL()
 		taskResult.Progress = t.Progress
 		taskResult.Reason = t.FailReason
 		task.Data = t.Data
 	} else if taskResult, err = adaptor.ParseTaskResult(responseBody); err != nil {
 		return fmt.Errorf("parseTaskResult failed for task %s: %w", taskId, err)
-	} else {
-		task.Data = redactVideoResponseBody(responseBody)
 	}
+	task.Data = redactVideoResponseBody(responseBody)
 
 	logger.LogDebug(ctx, "UpdateVideoSingleTask taskResult: %+v", taskResult)
 
@@ -122,6 +123,29 @@ func updateVideoSingleTask(ctx context.Context, adaptor channel.TaskAdaptor, cha
 	if taskResult.Status == "" {
 		//return fmt.Errorf("task %s status is empty", taskId)
 		taskResult = relaycommon.FailTaskInfo("upstream returned empty status")
+	}
+
+	// Media persistence is best effort. A storage failure must not block task completion.
+	if taskResult.Status == model.TaskStatusSuccess {
+		originalURL := taskResult.Url
+		if originalURL == "" {
+			originalURL = taskResult.RemoteUrl
+		}
+		originalCoverURL := taskResult.CoverUrl
+		mediaURL, coverURL, persisted, persistErr := service.PersistGeneratedVideoMediaBestEffort(ctx, channel, task, taskResult)
+		if !persisted {
+			task.PrivateData.ResultURL = originalURL
+			task.PrivateData.CoverURL = originalCoverURL
+			logger.LogWarn(ctx, fmt.Sprintf("persist generated video media for task %s failed, keep upstream response unchanged: %v", taskId, persistErr))
+		} else if transformedData, transformErr := service.OverrideGeneratedVideoResponseMediaURLs(task.Data, mediaURL, coverURL); transformErr != nil {
+			task.PrivateData.ResultURL = originalURL
+			task.PrivateData.CoverURL = originalCoverURL
+			logger.LogWarn(ctx, fmt.Sprintf("override generated video response media for task %s failed, keep upstream response unchanged: %v", taskId, transformErr))
+		} else {
+			task.PrivateData.ResultURL = mediaURL
+			task.PrivateData.CoverURL = coverURL
+			task.Data = transformedData
+		}
 	}
 
 	// 记录原本的状态，防止重复退款
@@ -264,6 +288,10 @@ func updateVideoSingleTask(ctx context.Context, adaptor channel.TaskAdaptor, cha
 	if err := task.Update(); err != nil {
 		common.SysLog("UpdateVideoTask task error: " + err.Error())
 		shouldRefund = false
+	} else if task.Status == model.TaskStatusSuccess {
+		if err := service.UpdateGeneratedVideoLog(task); err != nil {
+			logger.LogError(ctx, fmt.Sprintf("Update generated video log failed for task %s: %s", task.TaskID, err.Error()))
+		}
 	}
 
 	if shouldRefund {

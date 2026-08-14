@@ -260,6 +260,9 @@ func InitResources() error {
 	// This is a placeholder function for future resource initialization
 	err := godotenv.Load(".env")
 	if err != nil {
+		if !os.IsNotExist(err) {
+			return fmt.Errorf("failed to load .env: %w", err)
+		}
 		if common.DebugEnabled {
 			common.SysLog("No .env file found, using default environment variables. If needed, please create a .env file and set the relevant variables.")
 		}

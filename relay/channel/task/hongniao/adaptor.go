@@ -1,4 +1,4 @@
-package huaying
+package hongniao
 
 import (
 	"bytes"
@@ -306,8 +306,9 @@ func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, e
 	}
 	status := strings.ToLower(strings.TrimSpace(findString(payload, "status", "state")))
 	result := &relaycommon.TaskInfo{
-		TaskID: findString(payload, "id", "task_id", "taskId", "job_id", "jobId"),
-		Url:    findVideoURL(payload),
+		TaskID:   findString(payload, "id", "task_id", "taskId", "job_id", "jobId"),
+		Url:      findVideoURL(payload),
+		CoverUrl: findVideoCoverURL(payload),
 	}
 	switch status {
 	case "queued", "pending", "submitted", "created", "waiting":
@@ -628,15 +629,26 @@ func findString(payload map[string]any, keys ...string) string {
 func findVideoURL(value any) string {
 	switch typed := value.(type) {
 	case map[string]any:
-		for _, key := range []string{"video_url", "videoUrl", "url", "output_url", "outputUrl"} {
-			if text, ok := typed[key].(string); ok && strings.TrimSpace(text) != "" {
-				return text
-			}
-		}
+		// Generated media inside provider result containers is more specific than
+		// a top-level URL, which may point to a stale preview or temporary object.
 		for _, key := range []string{"data", "output", "result", "video"} {
 			if nested, exists := typed[key]; exists {
 				if url := findVideoURL(nested); url != "" {
 					return url
+				}
+			}
+		}
+		for _, key := range []string{"video_url", "videoUrl", "output_url", "outputUrl", "download_url", "downloadUrl", "url"} {
+			if text, ok := typed[key].(string); ok && strings.TrimSpace(text) != "" {
+				return text
+			}
+		}
+		// Hongniao may wrap the generated media in URL arrays such as
+		// result.output.outputUrls, result.outputs, result.videoUrls, or result.resultUrls.
+		for _, key := range []string{"outputUrls", "outputs", "videoUrls", "resultUrls", "output_urls", "video_urls", "result_urls"} {
+			if nested, exists := typed[key]; exists {
+				if videoURL := findVideoURL(nested); videoURL != "" {
+					return videoURL
 				}
 			}
 		}
@@ -650,6 +662,31 @@ func findVideoURL(value any) string {
 		text := strings.TrimSpace(typed)
 		if strings.HasPrefix(text, "http://") || strings.HasPrefix(text, "https://") {
 			return text
+		}
+	}
+	return ""
+}
+
+func findVideoCoverURL(value any) string {
+	switch typed := value.(type) {
+	case map[string]any:
+		for _, key := range []string{"data", "output", "result", "video"} {
+			if nested, exists := typed[key]; exists {
+				if coverURL := findVideoCoverURL(nested); coverURL != "" {
+					return coverURL
+				}
+			}
+		}
+		for _, key := range []string{"cover_url", "coverUrl", "poster_url", "posterUrl", "thumbnail_url", "thumbnailUrl", "cover_base64", "coverBase64"} {
+			if text, ok := typed[key].(string); ok && strings.TrimSpace(text) != "" {
+				return text
+			}
+		}
+	case []any:
+		for _, item := range typed {
+			if coverURL := findVideoCoverURL(item); coverURL != "" {
+				return coverURL
+			}
 		}
 	}
 	return ""

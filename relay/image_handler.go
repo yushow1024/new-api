@@ -111,11 +111,30 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 		}
 	}
 
+	originalWriter := c.Writer
+	bufferedWriter := common.NewBufferedResponseWriter(originalWriter)
+	c.Writer = bufferedWriter
+	defer func() {
+		c.Writer = originalWriter
+	}()
+
 	usage, newAPIError := adaptor.DoResponse(c, httpResp, info)
 	if newAPIError != nil {
-		// reset status code 重置状态码
 		service.ResetStatusCode(newAPIError, statusCodeMappingStr)
 		return newAPIError
+	}
+
+	originalBody := bufferedWriter.BodyBytes()
+	transformedBody, err := service.PersistImageResponse(c.Request.Context(), originalBody, info.ChannelSetting.Proxy)
+	if err != nil {
+		logger.LogWarn(c, "persist generated image failed, keep upstream response unchanged: "+err.Error())
+		transformedBody = originalBody
+	} else {
+		bufferedWriter.Header().Del("Content-Length")
+		bufferedWriter.Header().Set("Content-Type", "application/json; charset=utf-8")
+	}
+	if err := bufferedWriter.Commit(transformedBody); err != nil {
+		return types.NewError(fmt.Errorf("write transformed image response failed: %w", err), types.ErrorCodeBadResponseBody)
 	}
 
 	imageN := uint(1)

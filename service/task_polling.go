@@ -498,6 +498,7 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 		taskResult.TaskID = t.TaskID
 		taskResult.Status = string(t.Status)
 		taskResult.Url = t.GetResultURL()
+		taskResult.CoverUrl = t.GetCoverURL()
 		taskResult.Progress = t.Progress
 		taskResult.Reason = t.FailReason
 		task.Data = t.Data
@@ -536,6 +537,24 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 	shouldSettle := false
 	quota := task.Quota
 
+	if taskResult.Status == model.TaskStatusSuccess {
+		originalURL, originalCoverURL := originalGeneratedVideoMediaURLs(task, taskResult)
+		mediaURL, coverURL, persisted, persistErr := PersistGeneratedVideoMediaBestEffort(ctx, ch, task, taskResult)
+		if !persisted {
+			task.PrivateData.ResultURL = originalURL
+			task.PrivateData.CoverURL = originalCoverURL
+			logger.LogWarn(ctx, fmt.Sprintf("persist generated video media for task %s failed, keep upstream response unchanged: %v", task.TaskID, persistErr))
+		} else if transformedData, transformErr := OverrideGeneratedVideoResponseMediaURLs(task.Data, mediaURL, coverURL); transformErr != nil {
+			task.PrivateData.ResultURL = originalURL
+			task.PrivateData.CoverURL = originalCoverURL
+			logger.LogWarn(ctx, fmt.Sprintf("override generated video response media for task %s failed, keep upstream response unchanged: %v", task.TaskID, transformErr))
+		} else {
+			task.PrivateData.ResultURL = mediaURL
+			task.PrivateData.CoverURL = coverURL
+			task.Data = transformedData
+		}
+	}
+
 	task.Status = model.TaskStatus(taskResult.Status)
 	switch taskResult.Status {
 	case model.TaskStatusSubmitted:
@@ -551,16 +570,6 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 		task.Progress = taskcommon.ProgressComplete
 		if task.FinishTime == 0 {
 			task.FinishTime = now
-		}
-		if strings.HasPrefix(taskResult.Url, "data:") {
-			// data: URI (e.g. Vertex base64 encoded video) — keep in Data, not in ResultURL
-			task.PrivateData.ResultURL = taskcommon.BuildProxyURL(task.TaskID)
-		} else if taskResult.Url != "" {
-			// Direct upstream URL (e.g. Kling, Ali, Doubao, etc.)
-			task.PrivateData.ResultURL = taskResult.Url
-		} else {
-			// No URL from adaptor — construct proxy URL using public task ID
-			task.PrivateData.ResultURL = taskcommon.BuildProxyURL(task.TaskID)
 		}
 		shouldSettle = true
 	case model.TaskStatusFailure:
@@ -583,6 +592,7 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 		task.Progress = taskResult.Progress
 	}
 
+	stateUpdated := false
 	isDone := task.Status == model.TaskStatusSuccess || task.Status == model.TaskStatusFailure
 	if isDone && snap.Status != task.Status {
 		won, err := task.UpdateWithStatus(snap.Status)
@@ -594,16 +604,26 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 			logger.LogWarn(ctx, fmt.Sprintf("Task %s already transitioned by another process, skip billing", task.TaskID))
 			shouldRefund = false
 			shouldSettle = false
+		} else {
+			stateUpdated = true
 		}
 	} else if !snap.Equal(task.Snapshot()) {
-		if _, err := task.UpdateWithStatus(snap.Status); err != nil {
+		won, err := task.UpdateWithStatus(snap.Status)
+		if err != nil {
 			logger.LogError(ctx, fmt.Sprintf("Failed to update task %s: %s", task.TaskID, err.Error()))
+		} else {
+			stateUpdated = won
 		}
 	} else {
 		// No changes, skip update
 		logger.LogDebug(ctx, "No update needed for task %s", task.TaskID)
 	}
 
+	if task.Status == model.TaskStatusSuccess && stateUpdated {
+		if err := UpdateGeneratedVideoLog(task); err != nil {
+			logger.LogError(ctx, fmt.Sprintf("Update generated video log failed for task %s: %s", task.TaskID, err.Error()))
+		}
+	}
 	if shouldSettle {
 		settleTaskBillingOnComplete(ctx, adaptor, task, taskResult)
 	}

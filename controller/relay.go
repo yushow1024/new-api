@@ -123,16 +123,19 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		return
 	}
 
-	if relayInfo.RelayMode == relayconstant.RelayModeImagesGenerations {
-		if bodyStorage, bodyErr := common.GetBodyStorage(c); bodyErr != nil {
-			logger.LogWarn(c, "failed to get image generation request body for log: "+bodyErr.Error())
-		} else if requestBody, bodyErr := bodyStorage.Bytes(); bodyErr != nil {
-			logger.LogWarn(c, "failed to read image generation request body for log: "+bodyErr.Error())
-		} else {
-			common.SetContextKey(c, constant.ContextKeyLogRequestData, string(requestBody))
+	if relayInfo.RelayMode == relayconstant.RelayModeImagesGenerations || relayInfo.RelayMode == relayconstant.RelayModeImagesEdits {
+		if relayInfo.RelayMode == relayconstant.RelayModeImagesGenerations {
+			if bodyStorage, bodyErr := common.GetBodyStorage(c); bodyErr != nil {
+				logger.LogWarn(c, "failed to get image generation request body for log: "+bodyErr.Error())
+			} else if requestBody, bodyErr := bodyStorage.Bytes(); bodyErr != nil {
+				logger.LogWarn(c, "failed to read image generation request body for log: "+bodyErr.Error())
+			} else {
+				common.SetContextKey(c, constant.ContextKeyLogRequestData, string(requestBody))
+			}
 		}
 		common.StartResponseBodyCapture(c)
 	}
+
 	needSensitiveCheck := setting.ShouldCheckPromptSensitive()
 	needCountToken := constant.CountToken
 	// Avoid building huge CombineText (strings.Join) when token counting and sensitive check are both disabled.
@@ -508,9 +511,17 @@ func RelayTask(c *gin.Context) {
 		return
 	}
 
+	originalWriter := c.Writer
+	bufferedWriter := common.NewBufferedResponseWriter(originalWriter)
+	c.Writer = bufferedWriter
+	defer func() {
+		c.Writer = originalWriter
+	}()
+
 	var result *relay.TaskSubmitResult
 	var taskErr *dto.TaskError
-	var dedicatedVideoReqData []byte
+	var videoReqData []byte
+	var selectedChannel *model.Channel
 	defer func() {
 		if taskErr != nil && relayInfo.Billing != nil {
 			relayInfo.Billing.Refund(c)
@@ -556,15 +567,17 @@ func RelayTask(c *gin.Context) {
 			break
 		}
 		c.Request.Body = io.NopCloser(bodyStorage)
+		bufferedWriter.Reset()
 
 		result, taskErr = relay.RelayTaskSubmit(c, relayInfo)
 		if taskErr == nil {
+			selectedChannel = channel
 			if constant.IsDedicatedVideoPollingChannel(relayInfo.ChannelType) {
 				body, readErr := bodyStorage.Bytes()
 				if readErr != nil {
 					common.SysError("read dedicated video request body for task persistence failed: " + readErr.Error())
 				} else {
-					dedicatedVideoReqData = append([]byte(nil), body...)
+					videoReqData = append([]byte(nil), body...)
 				}
 			}
 			break
@@ -589,12 +602,8 @@ func RelayTask(c *gin.Context) {
 	}
 
 	// ── 成功：结算 + 日志 + 插入任务 ──
+	responseBody := bufferedWriter.BodyBytes()
 	if taskErr == nil {
-		if settleErr := service.SettleBilling(c, relayInfo, result.Quota); settleErr != nil {
-			common.SysError("settle task billing error: " + settleErr.Error())
-		}
-		logId := service.LogTaskConsumption(c, relayInfo)
-
 		task := model.InitTask(result.Platform, relayInfo)
 		task.PrivateData.UpstreamTaskID = result.UpstreamTaskID
 		task.PrivateData.BillingSource = relayInfo.BillingSource
@@ -612,25 +621,66 @@ func RelayTask(c *gin.Context) {
 		task.Data = result.TaskData
 		task.Action = relayInfo.Action
 		if constant.IsDedicatedVideoPollingChannel(relayInfo.ChannelType) {
-			task.ReqData = dedicatedVideoReqData
-			task.LogId = logId
+			task.ReqData = videoReqData
 		}
 		applyInitialTaskInfo(task, result.InitialTaskInfo)
-		if insertErr := task.Insert(); insertErr != nil {
-			common.SysError("insert task error: " + insertErr.Error())
-		} else {
-			if task.Status == model.TaskStatusFailure && task.Quota != 0 {
-				service.RefundTaskQuota(c, task, task.FailReason)
+
+		// 同步返回成品的视频必须先完成转存；转存失败时不提交上游原始响应，也不创建伪进行中任务。
+		if task.Status == model.TaskStatusSuccess && result.InitialTaskInfo != nil {
+			mediaURL, coverURL, persisted, persistErr := service.PersistGeneratedVideoMediaBestEffort(c.Request.Context(), selectedChannel, task, result.InitialTaskInfo)
+			if !persisted {
+				common.SysError("persist initial generated video media failed, keep upstream response unchanged: " + persistErr.Error())
+			} else {
+				transformedBody, transformErr := service.OverrideGeneratedVideoResponseMediaURLs(responseBody, mediaURL, coverURL)
+				if transformErr != nil {
+					common.SysError("override generated video media failed, keep upstream response unchanged: " + transformErr.Error())
+				} else {
+					task.PrivateData.ResultURL = mediaURL
+					task.PrivateData.CoverURL = coverURL
+					responseBody = transformedBody
+					bufferedWriter.Header().Del("Content-Length")
+					bufferedWriter.Header().Set("Content-Type", "application/json; charset=utf-8")
+				}
 			}
-			if constant.IsDedicatedVideoPollingChannel(relayInfo.ChannelType) &&
-				task.Status != model.TaskStatusSuccess && task.Status != model.TaskStatusFailure {
-				service.EnqueueDedicatedVideoTaskPolling(task.TaskID)
+		}
+
+		if taskErr == nil {
+			if insertErr := task.Insert(); insertErr != nil {
+				taskErr = service.TaskErrorWrapper(insertErr, "insert_task_failed", http.StatusInternalServerError)
+			} else {
+				if settleErr := service.SettleBilling(c, relayInfo, result.Quota); settleErr != nil {
+					common.SysError("settle task billing error: " + settleErr.Error())
+				}
+				task.LogId = service.LogTaskConsumption(c, relayInfo)
+				if task.LogId > 0 {
+					if updateErr := task.UpdateLogId(); updateErr != nil {
+						common.SysError("update task log id failed: " + updateErr.Error())
+					}
+				}
+				if task.Status == model.TaskStatusSuccess {
+					if logErr := service.UpdateGeneratedVideoLog(task); logErr != nil {
+						common.SysError("update generated video log response failed: " + logErr.Error())
+					}
+				}
+				if task.Status == model.TaskStatusFailure && task.Quota != 0 {
+					service.RefundTaskQuota(c, task, task.FailReason)
+				}
+				if constant.IsDedicatedVideoPollingChannel(relayInfo.ChannelType) &&
+					task.Status != model.TaskStatusSuccess && task.Status != model.TaskStatusFailure {
+					service.EnqueueDedicatedVideoTaskPolling(task.TaskID)
+				}
 			}
 		}
 	}
 
 	if taskErr != nil {
+		c.Writer = originalWriter
 		respondTaskError(c, taskErr)
+		return
+	}
+
+	if commitErr := bufferedWriter.Commit(responseBody); commitErr != nil {
+		common.SysError("write video task response failed: " + commitErr.Error())
 	}
 }
 
@@ -653,7 +703,10 @@ func applyInitialTaskInfo(task *model.Task, info *relaycommon.TaskInfo) {
 		task.FinishTime = now
 		if info.Url != "" {
 			task.PrivateData.ResultURL = info.Url
+		} else if info.RemoteUrl != "" {
+			task.PrivateData.ResultURL = info.RemoteUrl
 		}
+		task.PrivateData.CoverURL = info.CoverUrl
 	case model.TaskStatusFailure:
 		task.Progress = "100%"
 		task.FinishTime = now

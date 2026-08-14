@@ -1,4 +1,4 @@
-package huaying
+package hongniao
 
 import (
 	"bytes"
@@ -296,13 +296,18 @@ func TestBuildXingHeBodyFromHuayingContract(t *testing.T) {
 func TestParseTaskResult(t *testing.T) {
 	adaptor := newTestAdaptor(constant.ChannelTypeHuaying, "http://example.com/v1")
 	tests := []struct {
-		name       string
-		body       string
-		wantStatus model.TaskStatus
-		wantURL    string
+		name         string
+		body         string
+		wantStatus   model.TaskStatus
+		wantURL      string
+		wantCoverURL string
 	}{
 		{name: "processing", body: `{"id":"job_1","status":"processing","data":[]}`, wantStatus: model.TaskStatusInProgress},
 		{name: "success array", body: `{"id":"job_1","status":"succeeded","data":[{"url":"https://example.com/video.mp4"}]}`, wantStatus: model.TaskStatusSuccess, wantURL: "https://example.com/video.mp4"},
+		{name: "nested data URL wins over stale top-level URL", body: `{"id":"job_1","status":"succeeded","url":"https://stale.example.r2.dev/stale.mp4","data":[{"cover_url":"https://example.com/poster.jpg","url":"https://file.tripcdn.com/valid.mp4"}]}`, wantStatus: model.TaskStatusSuccess, wantURL: "https://file.tripcdn.com/valid.mp4", wantCoverURL: "https://example.com/poster.jpg"},
+		{name: "download URL fallback", body: `{"id":"job_1","status":"succeeded","result":{"download_url":"https://example.com/download.mp4"}}`, wantStatus: model.TaskStatusSuccess, wantURL: "https://example.com/download.mp4"},
+		{name: "Hongniao nested output URL arrays", body: `{"id":"task_1785251780393_5sihquqs_video_generation","object":"video","status":"completed","result":{"output":{"outputUrls":["https://example.com/nested.mp4"]},"outputs":["https://example.com/outputs.mp4"],"videoUrls":["https://example.com/videos.mp4"],"resultUrls":["https://example.com/results.mp4"]},"video_url":"https://example.com/top-level.mp4"}`, wantStatus: model.TaskStatusSuccess, wantURL: "https://example.com/nested.mp4"},
+		{name: "Hongniao outputs array fallback", body: `{"id":"job_outputs","status":"completed","result":{"outputs":["https://example.com/outputs-only.mp4"]}}`, wantStatus: model.TaskStatusSuccess, wantURL: "https://example.com/outputs-only.mp4"},
 		{name: "success direct string", body: `{"taskId":"job_2","status":"completed","data":"https://example.com/direct.mp4"}`, wantStatus: model.TaskStatusSuccess, wantURL: "https://example.com/direct.mp4"},
 		{name: "canceled", body: `{"id":"job_3","status":"canceled","error":{"message":"canceled by upstream"}}`, wantStatus: model.TaskStatusFailure},
 	}
@@ -313,6 +318,7 @@ func TestParseTaskResult(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, string(tt.wantStatus), result.Status)
 			require.Equal(t, tt.wantURL, result.Url)
+			require.Equal(t, tt.wantCoverURL, result.CoverUrl)
 		})
 	}
 }
