@@ -323,6 +323,7 @@ export interface GetTaskLogsParams {
   page_size?: number
   channel_id?: string
   task_id?: string
+  gc_type?: string
   start_timestamp?: number
   end_timestamp?: number
 }

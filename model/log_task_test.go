@@ -30,8 +30,8 @@ func TestGetUserTaskLogsWithSeparateDatabases(t *testing.T) {
 		DB, LOG_DB, logGroupCol = oldDB, oldLogDB, oldLogGroupCol
 	})
 
-	unlinked := &Log{UserId: 7, ModelName: "unlinked", Other: "{}"}
-	linked := &Log{UserId: 7, ModelName: "video-model", IsRefunded: true, Other: "{}"}
+	unlinked := &Log{UserId: 7, ModelName: "unlinked", GcType: "image", Other: "{}"}
+	linked := &Log{UserId: 7, ModelName: "video-model", GcType: "video", IsRefunded: true, Other: "{}"}
 	otherUserLog := &Log{UserId: 8, ModelName: "other-user", Other: "{}"}
 	if err := logDB.Create(unlinked).Error; err != nil {
 		t.Fatalf("create unlinked log: %v", err)
@@ -59,7 +59,7 @@ func TestGetUserTaskLogsWithSeparateDatabases(t *testing.T) {
 		t.Fatalf("create other user task: %v", err)
 	}
 
-	items, total, err := GetUserTaskLogs(7, LogTypeUnknown, 0, 0, "", "", 0, 10, "", "", "")
+	items, total, err := GetUserTaskLogs(7, LogTypeUnknown, 0, 0, "", "", 0, 10, "", "", "", "")
 	if err != nil {
 		t.Fatalf("get user task logs: %v", err)
 	}
@@ -101,5 +101,13 @@ func TestGetUserTaskLogsWithSeparateDatabases(t *testing.T) {
 	}
 	if items[1].Task != nil {
 		t.Fatalf("unlinked log task = %#v, want nil", items[1].Task)
+	}
+
+	videoItems, videoTotal, err := GetUserTaskLogs(7, LogTypeUnknown, 0, 0, "", "", 0, 10, "", "", "", "video")
+	if err != nil {
+		t.Fatalf("get video task logs: %v", err)
+	}
+	if videoTotal != 1 || len(videoItems) != 1 || videoItems[0].Log.GcType != "video" {
+		t.Fatalf("video gc_type filter returned total=%d items=%d: %#v", videoTotal, len(videoItems), videoItems)
 	}
 }

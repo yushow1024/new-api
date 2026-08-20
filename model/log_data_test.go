@@ -22,10 +22,13 @@ func TestLogRequestResponseDataMigrationAndPersistence(t *testing.T) {
 	if !db.Migrator().HasColumn(&Log{}, "res_data") {
 		t.Fatal("logs.res_data was not migrated")
 	}
+	if !db.Migrator().HasColumn(&Log{}, "gc_type") {
+		t.Fatal("logs.gc_type was not migrated")
+	}
 
 	requestData := LogData(`{"model":"gpt-image-1","prompt":"test"}`)
 	responseData := LogData(`{"data":[{"b64_json":"` + strings.Repeat("a", 128*1024) + `"}]}`)
-	created := &Log{ReqData: requestData, ResData: responseData}
+	created := &Log{ReqData: requestData, ResData: responseData, GcType: "image"}
 	if err := db.Create(created).Error; err != nil {
 		t.Fatalf("create log: %v", err)
 	}
@@ -39,5 +42,8 @@ func TestLogRequestResponseDataMigrationAndPersistence(t *testing.T) {
 	}
 	if stored.ResData != responseData {
 		t.Fatalf("res_data length = %d, want %d", len(stored.ResData), len(responseData))
+	}
+	if stored.GcType != "image" {
+		t.Fatalf("gc_type = %q, want image", stored.GcType)
 	}
 }

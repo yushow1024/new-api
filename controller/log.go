@@ -73,8 +73,9 @@ func GetUserTaskLogs(c *gin.Context) {
 	group := c.Query("group")
 	requestId := c.Query("request_id")
 	upstreamRequestId := c.Query("upstream_request_id")
+	gcType := c.Query("gc_type")
 
-	items, total, err := model.GetUserTaskLogs(userId, logType, startTimestamp, endTimestamp, modelName, tokenName, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), group, requestId, upstreamRequestId)
+	items, total, err := model.GetUserTaskLogs(userId, logType, startTimestamp, endTimestamp, modelName, tokenName, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), group, requestId, upstreamRequestId, gcType)
 	if err != nil {
 		common.ApiError(c, err)
 		return

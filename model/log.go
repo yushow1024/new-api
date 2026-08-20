@@ -37,6 +37,7 @@ type Log struct {
 	UserId            int     `json:"user_id" gorm:"index;index:idx_user_id_id,priority:1"`
 	CreatedAt         int64   `json:"created_at" gorm:"bigint;index:idx_created_at_id,priority:2;index:idx_created_at_type"`
 	Type              int     `json:"type" gorm:"index:idx_created_at_type"`
+	GcType            string  `json:"gc_type" gorm:"type:varchar(16);default:''"`
 	Content           string  `json:"content"`
 	Username          string  `json:"username" gorm:"index;index:index_username_model_name,priority:2;default:''"`
 	TokenName         string  `json:"token_name" gorm:"index;default:''"`
@@ -63,6 +64,25 @@ func getRelayLogData(c *gin.Context) (LogData, LogData) {
 	requestData := common.GetContextKeyString(c, constant.ContextKeyLogRequestData)
 	responseData := common.GetCapturedResponseBody(c)
 	return LogData(requestData), LogData(responseData)
+}
+
+func generationContentType(path string) string {
+	path = strings.TrimSuffix(path, "/")
+	switch {
+	case path == "/v1/videos/generations":
+		return "video"
+	case path == "/v1/images/edits", path == "/v1/images/generations":
+		return "image"
+	default:
+		return ""
+	}
+}
+
+func getGenerationContentType(c *gin.Context) string {
+	if c == nil || c.Request == nil || c.Request.URL == nil {
+		return ""
+	}
+	return generationContentType(c.Request.URL.Path)
 }
 
 // don't use iota, avoid change log type value
@@ -202,6 +222,7 @@ func RecordErrorLog(c *gin.Context, userId int, channelId int, modelName string,
 		Username:         username,
 		CreatedAt:        common.GetTimestamp(),
 		Type:             LogTypeError,
+		GcType:           getGenerationContentType(c),
 		Content:          content,
 		PromptTokens:     0,
 		CompletionTokens: 0,
@@ -268,6 +289,7 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 		Username:         username,
 		CreatedAt:        common.GetTimestamp(),
 		Type:             LogTypeConsume,
+		GcType:           getGenerationContentType(c),
 		Content:          params.Content,
 		PromptTokens:     params.PromptTokens,
 		CompletionTokens: params.CompletionTokens,
@@ -438,7 +460,7 @@ func GetAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelName
 
 const logSearchCountLimit = 10000
 
-func buildUserLogsQuery(userId int, logType int, startTimestamp int64, endTimestamp int64, modelName string, tokenName string, group string, requestId string, upstreamRequestId string) (*gorm.DB, error) {
+func buildUserLogsQuery(userId int, logType int, startTimestamp int64, endTimestamp int64, modelName string, tokenName string, group string, requestId string, upstreamRequestId string, gcType string) (*gorm.DB, error) {
 	var tx *gorm.DB
 	if logType == LogTypeUnknown {
 		tx = LOG_DB.Where("logs.user_id = ?", userId)
@@ -459,6 +481,9 @@ func buildUserLogsQuery(userId int, logType int, startTimestamp int64, endTimest
 	if upstreamRequestId != "" {
 		tx = tx.Where("logs.upstream_request_id = ?", upstreamRequestId)
 	}
+	if gcType != "" {
+		tx = tx.Where("logs.gc_type = ?", gcType)
+	}
 	if startTimestamp != 0 {
 		tx = tx.Where("logs.created_at >= ?", startTimestamp)
 	}
@@ -472,7 +497,7 @@ func buildUserLogsQuery(userId int, logType int, startTimestamp int64, endTimest
 }
 
 func GetUserLogs(userId int, logType int, startTimestamp int64, endTimestamp int64, modelName string, tokenName string, startIdx int, num int, group string, requestId string, upstreamRequestId string) (logs []*Log, total int64, err error) {
-	tx, err := buildUserLogsQuery(userId, logType, startTimestamp, endTimestamp, modelName, tokenName, group, requestId, upstreamRequestId)
+	tx, err := buildUserLogsQuery(userId, logType, startTimestamp, endTimestamp, modelName, tokenName, group, requestId, upstreamRequestId, "")
 	if err != nil {
 		return nil, 0, err
 	}
@@ -497,8 +522,8 @@ type UserLogTaskItem struct {
 	Task *Task
 }
 
-func GetUserTaskLogs(userId int, logType int, startTimestamp int64, endTimestamp int64, modelName string, tokenName string, startIdx int, num int, group string, requestId string, upstreamRequestId string) (items []*UserLogTaskItem, total int64, err error) {
-	tx, err := buildUserLogsQuery(userId, logType, startTimestamp, endTimestamp, modelName, tokenName, group, requestId, upstreamRequestId)
+func GetUserTaskLogs(userId int, logType int, startTimestamp int64, endTimestamp int64, modelName string, tokenName string, startIdx int, num int, group string, requestId string, upstreamRequestId string, gcType string) (items []*UserLogTaskItem, total int64, err error) {
+	tx, err := buildUserLogsQuery(userId, logType, startTimestamp, endTimestamp, modelName, tokenName, group, requestId, upstreamRequestId, gcType)
 	if err != nil {
 		return nil, 0, err
 	}
