@@ -146,6 +146,13 @@ func getUserQuota(t *testing.T, id int) int {
 	return user.Quota
 }
 
+func getUserUsedQuota(t *testing.T, id int) int {
+	t.Helper()
+	var user model.User
+	require.NoError(t, model.DB.Select("used_quota").Where("id = ?", id).First(&user).Error)
+	return user.UsedQuota
+}
+
 func getTokenRemainQuota(t *testing.T, id int) int {
 	t.Helper()
 	var token model.Token
@@ -197,6 +204,7 @@ func TestRefundTaskQuota_Wallet(t *testing.T) {
 	const tokenRemain = 5000
 
 	seedUser(t, userID, initQuota)
+	model.UpdateUserUsedQuota(userID, preConsumed)
 	seedToken(t, tokenID, userID, "sk-test-key", tokenRemain)
 	seedChannel(t, channelID)
 
@@ -209,6 +217,10 @@ func TestRefundTaskQuota_Wallet(t *testing.T) {
 
 	// User quota should increase by preConsumed
 	assert.Equal(t, initQuota+preConsumed, getUserQuota(t, userID))
+
+	// The refund must also reverse the usage counter, preserving total quota.
+	assert.Equal(t, 0, getUserUsedQuota(t, userID))
+	assert.Equal(t, initQuota+preConsumed, getUserQuota(t, userID)+getUserUsedQuota(t, userID))
 
 	// Token remain_quota should increase, used_quota should decrease
 	assert.Equal(t, tokenRemain+preConsumed, getTokenRemainQuota(t, tokenID))
@@ -310,6 +322,7 @@ func TestRecalculate_PositiveDelta(t *testing.T) {
 	const tokenRemain = 5000
 
 	seedUser(t, userID, initQuota)
+	model.UpdateUserUsedQuota(userID, preConsumed)
 	seedToken(t, tokenID, userID, "sk-recalc-pos", tokenRemain)
 	seedChannel(t, channelID)
 
@@ -319,6 +332,10 @@ func TestRecalculate_PositiveDelta(t *testing.T) {
 
 	// User quota should decrease by the delta (1000 additional charge)
 	assert.Equal(t, initQuota-(actualQuota-preConsumed), getUserQuota(t, userID))
+
+	// Usage and remaining quota move in opposite directions, so total quota is stable.
+	assert.Equal(t, actualQuota, getUserUsedQuota(t, userID))
+	assert.Equal(t, initQuota+preConsumed, getUserQuota(t, userID)+getUserUsedQuota(t, userID))
 
 	// Token should also be charged the delta
 	assert.Equal(t, tokenRemain-(actualQuota-preConsumed), getTokenRemainQuota(t, tokenID))
@@ -343,6 +360,7 @@ func TestRecalculate_NegativeDelta(t *testing.T) {
 	const tokenRemain = 5000
 
 	seedUser(t, userID, initQuota)
+	model.UpdateUserUsedQuota(userID, preConsumed)
 	seedToken(t, tokenID, userID, "sk-recalc-neg", tokenRemain)
 	seedChannel(t, channelID)
 
@@ -355,6 +373,10 @@ func TestRecalculate_NegativeDelta(t *testing.T) {
 
 	// User quota should increase by abs(delta) = 2000 (refund overpayment)
 	assert.Equal(t, initQuota+(preConsumed-actualQuota), getUserQuota(t, userID))
+
+	// Usage and remaining quota move in opposite directions, so total quota is stable.
+	assert.Equal(t, actualQuota, getUserUsedQuota(t, userID))
+	assert.Equal(t, initQuota+preConsumed, getUserQuota(t, userID)+getUserUsedQuota(t, userID))
 
 	// Token should be refunded the difference
 	assert.Equal(t, tokenRemain+(preConsumed-actualQuota), getTokenRemainQuota(t, tokenID))

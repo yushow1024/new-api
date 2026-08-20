@@ -984,6 +984,20 @@ func updateUserUsedQuotaAndRequestCount(id int, quota int, count int) {
 	//}
 }
 
+// UpdateUserUsedQuota adjusts the user's consumed quota without changing the
+// request count. A negative delta is used to reverse quota that was previously
+// counted as consumed and has subsequently been refunded.
+func UpdateUserUsedQuota(id int, quota int) {
+	if quota == 0 {
+		return
+	}
+	if common.BatchUpdateEnabled {
+		addNewRecord(BatchUpdateTypeUsedQuota, id, quota)
+		return
+	}
+	updateUserUsedQuota(id, quota)
+}
+
 func updateUserUsedQuota(id int, quota int) {
 	err := DB.Model(&User{}).Where("id = ?", id).Updates(
 		map[string]interface{}{

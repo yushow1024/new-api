@@ -173,6 +173,10 @@ func RefundTaskQuota(ctx context.Context, task *model.Task, reason string) {
 	taskAdjustTokenQuota(ctx, task, -quota)
 	markTaskLogRefunded(ctx, task)
 
+	// The submission has already counted the reserved quota in used_quota.
+	// Reverse it so remaining quota + used quota stays unchanged after a refund.
+	model.UpdateUserUsedQuota(task.UserId, -quota)
+
 	// 3. 记录日志
 	other := taskBillingOther(task)
 	other["task_id"] = task.TaskID
@@ -236,6 +240,7 @@ func RecalculateTaskQuota(ctx context.Context, task *model.Task, actualQuota int
 		logType = model.LogTypeRefund
 		logQuota = -quotaDelta
 		markTaskLogRefunded(ctx, task)
+		model.UpdateUserUsedQuota(task.UserId, quotaDelta)
 	}
 	other := taskBillingOther(task)
 	other["task_id"] = task.TaskID
